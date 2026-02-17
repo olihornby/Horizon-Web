@@ -14,6 +14,7 @@
         <a href="about.html">About</a>
         <a href="services.html">Services</a>
         <a href="contact.html">Contact</a>
+        <a href="admin.html" data-admin-link hidden>Admin</a>
       </nav>
     </div>
   </header>
@@ -131,6 +132,46 @@
             submitButton.disabled = false;
           }
         }
+      });
+    })();
+  </script>
+
+  <script>
+    (function () {
+      const homeLink = document.querySelector(".logo-link");
+      const adminLink = document.querySelector("[data-admin-link]");
+
+      if (!homeLink || !adminLink) {
+        return;
+      }
+
+      const countKey = "horizonHomeTapCount";
+      const visibleKey = "horizonAdminMenuVisible";
+
+      function showAdminLink() {
+        adminLink.hidden = false;
+      }
+
+      if (sessionStorage.getItem(visibleKey) === "1") {
+        showAdminLink();
+      }
+
+      homeLink.addEventListener("click", function (event) {
+        if (sessionStorage.getItem(visibleKey) === "1") {
+          return;
+        }
+
+        const currentCount = Number(sessionStorage.getItem(countKey) || "0") + 1;
+
+        if (currentCount >= 5) {
+          event.preventDefault();
+          sessionStorage.setItem(countKey, "0");
+          sessionStorage.setItem(visibleKey, "1");
+          showAdminLink();
+          return;
+        }
+
+        sessionStorage.setItem(countKey, String(currentCount));
       });
     })();
   </script>

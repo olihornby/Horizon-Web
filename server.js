@@ -123,6 +123,10 @@ app.get("/health", (_req, res) => {
   return res.status(200).json({ ok: true });
 });
 
+app.get("/admin", (_req, res) => {
+  return res.redirect("/admin.html");
+});
+
 app.post("/api/inquiries", async (req, res) => {
   const fullName = (req.body["full-name"] || req.body.fullName || "").trim();
   const company = (req.body.company || "").trim();
