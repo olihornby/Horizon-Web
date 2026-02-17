@@ -37,6 +37,7 @@ Use these URLs after deploy:
 - Public site: `https://your-service-name.onrender.com`
 - Contact form: `https://your-service-name.onrender.com/contact.html`
 - Admin viewer: `https://your-service-name.onrender.com/admin.html`
+- CSV export: `https://your-service-name.onrender.com/api/inquiries.csv?key=YOUR_ADMIN_KEY`
 
 ## Important notes
 
@@ -51,3 +52,10 @@ Use these URLs after deploy:
 3. Keep the same Render PostgreSQL database attached to the service.
 
 As long as the service still uses the same database, your inquiry history stays intact.
+
+## Export inquiries outside the table view
+
+- Open the admin page and click **Export CSV**.
+- You will be prompted for your admin key first (if it is not already entered).
+- In supported browsers, a save dialog appears so you can choose where to save the file.
+- In browsers without file-picker support, the CSV downloads using the browser's default download behavior.

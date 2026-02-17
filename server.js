@@ -33,6 +33,46 @@ function writeInquiries(items) {
   fs.writeFileSync(dbPath, JSON.stringify(items, null, 2), "utf8");
 }
 
+function toCsvValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  const text = String(value).replace(/"/g, '""');
+  return /[",\n\r]/.test(text) ? `"${text}"` : text;
+}
+
+function toInquiriesCsv(rows) {
+  const headers = ["id", "full_name", "company", "email", "request_type", "details", "created_at"];
+  const lines = [headers.join(",")];
+
+  for (const row of rows) {
+    lines.push(
+      headers
+        .map((header) => {
+          const value = row[header];
+
+          if (header === "created_at" && value) {
+            return toCsvValue(new Date(value).toISOString());
+          }
+
+          return toCsvValue(value);
+        })
+        .join(",")
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function getSuppliedAdminKey(req) {
+  return (req.query.key || req.headers["x-admin-key"] || "").toString();
+}
+
+function isAuthorizedAdminRequest(req) {
+  return Boolean(ADMIN_KEY) && getSuppliedAdminKey(req) === ADMIN_KEY;
+}
+
 async function initStorage() {
   if (!usePostgres) {
     ensureDbFile();
@@ -169,9 +209,7 @@ app.get("/api/inquiries", async (req, res) => {
     });
   }
 
-  const suppliedKey = req.query.key || req.headers["x-admin-key"];
-
-  if (suppliedKey !== ADMIN_KEY) {
+  if (!isAuthorizedAdminRequest(req)) {
     return res.status(401).json({
       ok: false,
       message: "Unauthorized"
@@ -186,6 +224,37 @@ app.get("/api/inquiries", async (req, res) => {
     return res.status(500).json({
       ok: false,
       message: "Unable to load inquiries right now."
+    });
+  }
+});
+
+app.get("/api/inquiries.csv", async (req, res) => {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({
+      ok: false,
+      message: "Admin endpoint is not configured. Set ADMIN_KEY on the server."
+    });
+  }
+
+  if (!isAuthorizedAdminRequest(req)) {
+    return res.status(401).json({
+      ok: false,
+      message: "Unauthorized"
+    });
+  }
+
+  try {
+    const rows = await listInquiries();
+    const csv = toInquiriesCsv(rows);
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=Horizon-inquiries.csv");
+    return res.status(200).send(csv);
+  } catch (error) {
+    console.error("Failed to export inquiries CSV", error);
+    return res.status(500).json({
+      ok: false,
+      message: "Unable to export inquiries right now."
     });
   }
 });

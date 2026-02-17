@@ -29,6 +29,7 @@
           <label for="admin-key">Admin Key</label>
           <input id="admin-key" name="admin-key" type="password" required />
           <button class="btn btn-submit" type="submit">Load Inquiries</button>
+          <button class="btn btn-submit" type="button" id="export-csv">Export CSV</button>
         </form>
 
         <p id="admin-status" class="form-status" aria-live="polite"></p>
@@ -68,6 +69,7 @@
       const keyInput = document.getElementById("admin-key");
       const status = document.getElementById("admin-status");
       const tbody = document.getElementById("inquiry-body");
+      const exportButton = document.getElementById("export-csv");
 
       function escapeHtml(value) {
         return String(value)
@@ -128,6 +130,78 @@
           status.className = "form-status form-status-error";
         }
       });
+
+      if (exportButton) {
+        exportButton.addEventListener("click", async function () {
+          let key = keyInput.value.trim();
+
+          if (!key) {
+            key = window.prompt("Enter admin key to export inquiries:", "") || "";
+            key = key.trim();
+
+            if (key) {
+              keyInput.value = key;
+            }
+          }
+
+          if (!key) {
+            status.textContent = "Admin key is required before export.";
+            status.className = "form-status form-status-error";
+            return;
+          }
+
+          exportButton.disabled = true;
+          status.textContent = "Preparing CSV export...";
+          status.className = "form-status form-status-loading";
+
+          try {
+            const response = await fetch("/api/inquiries.csv?key=" + encodeURIComponent(key), {
+              headers: {
+                Accept: "text/csv"
+              }
+            });
+
+            if (!response.ok) {
+              throw new Error("Export failed");
+            }
+
+            const blob = await response.blob();
+
+            if (window.showSaveFilePicker) {
+              const handle = await window.showSaveFilePicker({
+                suggestedName: "Horizon-inquiries.csv",
+                types: [
+                  {
+                    description: "CSV file",
+                    accept: { "text/csv": [".csv"] }
+                  }
+                ]
+              });
+
+              const writable = await handle.createWritable();
+              await writable.write(blob);
+              await writable.close();
+            } else {
+              const tempUrl = URL.createObjectURL(blob);
+              const downloadLink = document.createElement("a");
+              downloadLink.href = tempUrl;
+              downloadLink.download = "Horizon-inquiries.csv";
+              document.body.appendChild(downloadLink);
+              downloadLink.click();
+              downloadLink.remove();
+              URL.revokeObjectURL(tempUrl);
+            }
+
+            status.textContent = "CSV export complete.";
+            status.className = "form-status form-status-success";
+          } catch (error) {
+            status.textContent = "Could not export CSV. Check your admin key and try again.";
+            status.className = "form-status form-status-error";
+          } finally {
+            exportButton.disabled = false;
+          }
+        });
+      }
     })();
   </script>
 </body>
