@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin | Horizon</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container nav">
+      <h1 class="logo"><a class="logo-link" href="index.html">Horizon <span class="logo-home">Home</span></a></h1>
+      <nav>
+        <a href="about.html">About</a>
+        <a href="services.html">Services</a>
+        <a href="contact.html">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <h3>Inquiry Admin</h3>
+        <p>Enter your admin key to load support and consultation submissions.</p>
+
+        <form id="admin-form" class="admin-auth" autocomplete="off">
+          <label for="admin-key">Admin Key</label>
+          <input id="admin-key" name="admin-key" type="password" required />
+          <button class="btn btn-submit" type="submit">Load Inquiries</button>
+        </form>
+
+        <p id="admin-status" class="form-status" aria-live="polite"></p>
+
+        <div class="table-wrap">
+          <table class="inquiry-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Name</th>
+                <th>Company</th>
+                <th>Email</th>
+                <th>Type</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="inquiry-body">
+              <tr>
+                <td colspan="6">No data loaded yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>© 2026 Horizon. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const form = document.getElementById("admin-form");
+      const keyInput = document.getElementById("admin-key");
+      const status = document.getElementById("admin-status");
+      const tbody = document.getElementById("inquiry-body");
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      function renderRows(items) {
+        if (!items.length) {
+          tbody.innerHTML = "<tr><td colspan='6'>No inquiries yet.</td></tr>";
+          return;
+        }
+
+        tbody.innerHTML = items
+          .map(function (row) {
+            const date = new Date(row.created_at).toLocaleString();
+            return "<tr>" +
+              "<td>" + escapeHtml(date) + "</td>" +
+              "<td>" + escapeHtml(row.full_name) + "</td>" +
+              "<td>" + escapeHtml(row.company || "-") + "</td>" +
+              "<td>" + escapeHtml(row.email) + "</td>" +
+              "<td>" + escapeHtml(row.request_type) + "</td>" +
+              "<td>" + escapeHtml(row.details) + "</td>" +
+            "</tr>";
+          })
+          .join("");
+      }
+
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        const key = keyInput.value.trim();
+        if (!key) {
+          status.textContent = "Please provide an admin key.";
+          status.className = "form-status form-status-error";
+          return;
+        }
+
+        status.textContent = "Loading inquiries...";
+        status.className = "form-status form-status-loading";
+
+        try {
+          const response = await fetch("/api/inquiries?key=" + encodeURIComponent(key));
+          const payload = await response.json();
+
+          if (!response.ok || !payload.ok) {
+            throw new Error("Unauthorized or request failed");
+          }
+
+          renderRows(payload.inquiries || []);
+          status.textContent = "Inquiries loaded.";
+          status.className = "form-status form-status-success";
+        } catch (error) {
+          status.textContent = "Unable to load inquiries. Check your admin key and try again.";
+          status.className = "form-status form-status-error";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

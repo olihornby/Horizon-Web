@@ -1,0 +1,15 @@
+{
+  "name": "horizon-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Horizon website with lightweight contact backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
