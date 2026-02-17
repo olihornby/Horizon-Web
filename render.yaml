@@ -1,3 +1,9 @@
+databases:
+  - name: horizon-db
+    plan: free
+    databaseName: horizon
+    user: horizon_user
+
 services:
   - type: web
     name: horizon-web
@@ -9,5 +15,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20
+      - key: DATABASE_URL
+        fromDatabase:
+          name: horizon-db
+          property: connectionString
       - key: ADMIN_KEY
         generateValue: true

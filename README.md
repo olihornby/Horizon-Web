@@ -22,6 +22,8 @@ This project is a static website plus an Express backend for contact form submis
 ## Deploy online (public access)
 
 This repo is ready for Render deployment via `render.yaml`.
+It now provisions a managed PostgreSQL database and connects it through `DATABASE_URL`,
+so inquiries persist across deploys/pushes.
 
 1. Push this folder to a GitHub repo.
 2. Create a Render account and connect GitHub.
@@ -39,5 +41,13 @@ Use these URLs after deploy:
 ## Important notes
 
 - The contact form now submits in a backend-compatible format and is saved by `POST /api/inquiries`.
-- Inquiries are stored in `inquiries.json` on the server filesystem.
-- On many free hosts, filesystem data can be reset on redeploy/restart. For long-term persistence, move inquiries to a database.
+- In production (when `DATABASE_URL` exists), inquiries are stored in PostgreSQL and persist through code pushes/redeploys.
+- In local development (without `DATABASE_URL`), inquiries are stored in `inquiries.json`.
+
+## Pushing updates without losing inquiries
+
+1. Commit and push code updates to GitHub.
+2. Let Render auto-deploy (or trigger manual deploy).
+3. Keep the same Render PostgreSQL database attached to the service.
+
+As long as the service still uses the same database, your inquiry history stays intact.
