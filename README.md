@@ -36,6 +36,7 @@ so inquiries persist across deploys/pushes.
 Use these URLs after deploy:
 - Public site: `https://your-service-name.onrender.com`
 - Contact form: `https://your-service-name.onrender.com/contact.html`
+- Account portal: `https://your-service-name.onrender.com/account.html`
 - Admin viewer: `https://your-service-name.onrender.com/admin.html`
 - CSV export: `https://your-service-name.onrender.com/api/inquiries.csv?key=YOUR_ADMIN_KEY`
 - Monitoring details: `https://your-service-name.onrender.com/health/details`
@@ -47,6 +48,7 @@ Use these URLs after deploy:
 - In production (when `DATABASE_URL` exists), inquiries are stored in PostgreSQL and persist through code pushes/redeploys.
 - In local development (without `DATABASE_URL`), inquiries are stored in `inquiries.json`.
 - Automated backups run every 15 minutes (recommended default) and are written to `/backups` as JSON + CSV snapshots.
+- Account login/sign-up and project-progress tracking are available at `/account.html`.
 
 ## Pushing updates without losing inquiries
 
@@ -72,6 +74,14 @@ As long as the service still uses the same database, your inquiry history stays 
 - Attachment download links in the admin table
 - Analytics summary cards and activity audit feed
 
+## Client portal features
+
+- User account registration and login
+- JWT-based authenticated sessions for portal APIs
+- Project progress dashboard for logged-in users
+- Left-side slide-out menu with hamburger button and logout action
+- Admin progress update API: `POST /api/admin/user-progress` (requires admin key)
+
 ## Notification and alert environment variables (optional)
 
 Set these in your deployment platform to enable email notifications and monitoring alerts:
@@ -85,6 +95,7 @@ Set these in your deployment platform to enable email notifications and monitori
 - `NOTIFY_EMAIL` (recipient for new inquiry notifications)
 - `ALERT_EMAIL` (recipient for health-alert emails)
 - `BACKUP_CRON` (optional cron override for backup frequency; default is `*/15 * * * *`)
+- `AUTH_JWT_SECRET` (recommended in production for account session token signing)
 
 If SMTP values are not provided, the app still works but email notifications/alerts are disabled.
 

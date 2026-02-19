@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Account | Horizon</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2" />
+  <script src="theme.js" defer></script>
+  <script src="auth.js" defer></script>
+  <script src="menu.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container nav">
+      <h1 class="logo"><a class="logo-link" href="index.html">Horizon <span class="logo-home">Home</span></a></h1>
+      <nav>
+        <a href="about.html">About</a>
+        <a href="services.html">Services</a>
+        <a href="contact.html">Contact</a>
+        <a href="account.html">Account</a>
+        <a href="admin.html" data-admin-link hidden>Admin</a>
+        <button class="theme-toggle" type="button" data-theme-toggle>Light mode</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <h3>Client Portal</h3>
+        <p>Create an account or log in to track project progress.</p>
+
+        <div class="account-grid">
+          <article class="card">
+            <h4>Sign In</h4>
+            <form id="login-form" class="account-form" autocomplete="off">
+              <label for="login-identity">Username or Email</label>
+              <input id="login-identity" type="text" required />
+
+              <label for="login-password">Password</label>
+              <input id="login-password" type="password" required />
+
+              <button class="btn btn-submit" type="submit">Log In</button>
+            </form>
+          </article>
+
+          <article class="card">
+            <h4>Create Account</h4>
+            <form id="register-form" class="account-form" autocomplete="off">
+              <label for="register-username">Username</label>
+              <input id="register-username" type="text" required />
+
+              <label for="register-email">Email</label>
+              <input id="register-email" type="email" required />
+
+              <label for="register-password">Password</label>
+              <input id="register-password" type="password" minlength="8" required />
+
+              <button class="btn btn-submit" type="submit">Create Account</button>
+            </form>
+          </article>
+        </div>
+
+        <p id="account-status" class="form-status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="section section-alt">
+      <div class="container">
+        <h3>Your Project Progress</h3>
+        <div id="progress-list" class="progress-list">
+          <article class="card">
+            <p>Log in to load your project updates.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>© 2026 Horizon. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const status = document.getElementById("account-status");
+      const loginForm = document.getElementById("login-form");
+      const registerForm = document.getElementById("register-form");
+      const progressList = document.getElementById("progress-list");
+
+      const auth = window.HorizonAuth;
+
+      function setStatus(message, cls) {
+        status.textContent = message;
+        status.className = "form-status " + (cls || "");
+      }
+
+      function renderProjects(projects) {
+        if (!projects || !projects.length) {
+          progressList.innerHTML = '<article class="card"><p>No project updates yet.</p></article>';
+          return;
+        }
+
+        progressList.innerHTML = projects
+          .map(function (item) {
+            const pct = Math.max(0, Math.min(100, Number(item.percent_complete || 0)));
+            const updated = new Date(item.updated_at).toLocaleString();
+            return '<article class="card progress-card">' +
+              '<h4>' + item.project_name + '</h4>' +
+              '<p><strong>Status:</strong> ' + item.status + '</p>' +
+              '<p>' + item.summary + '</p>' +
+              '<div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
+                '<span style="width:' + pct + '%"></span>' +
+              '</div>' +
+              '<p><strong>Completion:</strong> ' + pct + '%</p>' +
+              '<p class="progress-updated">Last updated: ' + updated + '</p>' +
+            '</article>';
+          })
+          .join("");
+      }
+
+      async function loadMeAndProjects() {
+        const token = auth.getToken();
+        if (!token) {
+          renderProjects([]);
+          return;
+        }
+
+        try {
+          const mePayload = await auth.fetchJson("/api/auth/me");
+          auth.setSession(token, mePayload.user);
+
+          const projectsPayload = await auth.fetchJson("/api/user/progress");
+          renderProjects(projectsPayload.projects || []);
+          setStatus("Logged in. Project progress loaded.", "form-status-success");
+        } catch (error) {
+          auth.clearSession();
+          renderProjects([]);
+          setStatus(error.message || "Session expired. Please log in again.", "form-status-error");
+        }
+      }
+
+      loginForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        const identity = document.getElementById("login-identity").value.trim();
+        const password = document.getElementById("login-password").value;
+
+        setStatus("Signing in...", "form-status-loading");
+
+        try {
+          const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ identity, password })
+          });
+
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || "Login failed.");
+          }
+
+          auth.setSession(payload.token, payload.user);
+          await loadMeAndProjects();
+        } catch (error) {
+          setStatus(error.message || "Unable to login.", "form-status-error");
+        }
+      });
+
+      registerForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        const username = document.getElementById("register-username").value.trim();
+        const email = document.getElementById("register-email").value.trim();
+        const password = document.getElementById("register-password").value;
+
+        setStatus("Creating account...", "form-status-loading");
+
+        try {
+          const response = await fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ username, email, password })
+          });
+
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || "Account creation failed.");
+          }
+
+          auth.setSession(payload.token, payload.user);
+          setStatus("Account created and logged in.", "form-status-success");
+          await loadMeAndProjects();
+        } catch (error) {
+          setStatus(error.message || "Unable to create account.", "form-status-error");
+        }
+      });
+
+      loadMeAndProjects();
+    })();
+  </script>
+
+  <script>
+    (function () {
+      const homeLink = document.querySelector(".logo-link");
+      const adminLink = document.querySelector("[data-admin-link]");
+
+      if (!homeLink || !adminLink) {
+        return;
+      }
+
+      const countKey = "horizonHomeTapCount";
+      const visibleKey = "horizonAdminMenuVisible";
+
+      function showAdminLink() {
+        adminLink.hidden = false;
+      }
+
+      if (sessionStorage.getItem(visibleKey) === "1") {
+        showAdminLink();
+      }
+
+      homeLink.addEventListener("click", function (event) {
+        if (sessionStorage.getItem(visibleKey) === "1") {
+          return;
+        }
+
+        const currentCount = Number(sessionStorage.getItem(countKey) || "0") + 1;
+
+        if (currentCount >= 5) {
+          event.preventDefault();
+          sessionStorage.setItem(countKey, "0");
+          sessionStorage.setItem(visibleKey, "1");
+          showAdminLink();
+          return;
+        }
+
+        sessionStorage.setItem(countKey, String(currentCount));
+      });
+    })();
+  </script>
+</body>
+</html>

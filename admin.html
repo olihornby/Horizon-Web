@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2" />
   <script src="theme.js" defer></script>
+  <script src="auth.js" defer></script>
+  <script src="menu.js" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -16,6 +18,7 @@
         <a href="about.html">About</a>
         <a href="services.html">Services</a>
         <a href="contact.html">Contact</a>
+        <a href="account.html">Account</a>
         <a href="admin.html" data-admin-link hidden>Admin</a>
         <button class="theme-toggle" type="button" data-theme-toggle>Light mode</button>
       </nav>
@@ -47,6 +50,39 @@
         <section class="card admin-panel" id="monitor-panel">
           <h4>Monitoring</h4>
           <p id="monitor-text">No monitoring data yet.</p>
+        </section>
+
+        <section class="card admin-panel" id="client-progress-panel">
+          <h4>Update Client Project Progress</h4>
+          <form id="progress-form" class="admin-filters" autocomplete="off">
+            <label for="progress-identity">Client Username or Email</label>
+            <input id="progress-identity" type="text" placeholder="username or email" required />
+
+            <label for="progress-project">Project Name</label>
+            <input id="progress-project" type="text" placeholder="Project Alpha" required />
+
+            <label for="progress-status">Project Status</label>
+            <input id="progress-status" type="text" placeholder="Planning / In Development / QA" required />
+
+            <label for="progress-percent">Percent Complete</label>
+            <input id="progress-percent" type="number" min="0" max="100" step="1" value="0" required />
+
+            <label for="progress-summary">Progress Summary</label>
+            <textarea id="progress-summary" rows="3" placeholder="What has been completed since the last update?" required></textarea>
+
+            <div class="admin-filter-actions">
+              <button class="btn btn-submit" type="submit">Save Progress Update</button>
+            </div>
+          </form>
+
+          <div class="api-snippet-wrap">
+            <p class="api-snippet-title">API Example (cURL)</p>
+            <pre id="progress-api-snippet" class="api-snippet">curl -X POST "https://your-service-name.onrender.com/api/admin/user-progress" \
+  -H "Content-Type: application/json" \
+  -H "x-admin-key: YOUR_ADMIN_KEY" \
+  -d '{"identity":"client@example.com","projectName":"Project Alpha","status":"In Development","percentComplete":45,"summary":"Core features delivered and in internal QA."}'</pre>
+            <button class="btn btn-submit" type="button" id="copy-progress-api">Copy cURL</button>
+          </div>
         </section>
 
         <form id="filter-form" class="admin-filters" autocomplete="off">
@@ -147,6 +183,14 @@
       const filterFrom = document.getElementById("filter-from");
       const filterTo = document.getElementById("filter-to");
       const resetFiltersButton = document.getElementById("reset-filters");
+      const progressForm = document.getElementById("progress-form");
+      const progressIdentity = document.getElementById("progress-identity");
+      const progressProject = document.getElementById("progress-project");
+      const progressStatus = document.getElementById("progress-status");
+      const progressPercent = document.getElementById("progress-percent");
+      const progressSummary = document.getElementById("progress-summary");
+      const copyProgressApiButton = document.getElementById("copy-progress-api");
+      const progressApiSnippet = document.getElementById("progress-api-snippet");
 
       const prevPageButton = document.getElementById("prev-page");
       const nextPageButton = document.getElementById("next-page");
@@ -426,6 +470,62 @@
           await loadInquiries();
         }
       });
+
+      if (progressForm) {
+        progressForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          if (!state.key) {
+            setStatus("Load inquiries first with your admin key.", "form-status-error");
+            return;
+          }
+
+          const identity = progressIdentity.value.trim();
+          const projectName = progressProject.value.trim();
+          const projectStatus = progressStatus.value.trim();
+          const percentComplete = Number(progressPercent.value);
+          const summary = progressSummary.value.trim();
+
+          if (!identity || !projectName || !projectStatus || !summary || !Number.isFinite(percentComplete)) {
+            setStatus("All progress update fields are required.", "form-status-error");
+            return;
+          }
+
+          try {
+            await fetchJson("/api/admin/user-progress", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                identity,
+                projectName,
+                status: projectStatus,
+                percentComplete,
+                summary
+              })
+            });
+
+            setStatus("Client project progress updated.", "form-status-success");
+            progressForm.reset();
+            progressPercent.value = "0";
+            await loadAudit();
+          } catch (error) {
+            setStatus(error.message || "Unable to update client progress.", "form-status-error");
+          }
+        });
+      }
+
+      if (copyProgressApiButton && progressApiSnippet) {
+        copyProgressApiButton.addEventListener("click", async function () {
+          const text = progressApiSnippet.textContent || "";
+
+          try {
+            await navigator.clipboard.writeText(text);
+            setStatus("Progress API cURL copied.", "form-status-success");
+          } catch (_error) {
+            setStatus("Unable to copy automatically. Please copy the snippet manually.", "form-status-error");
+          }
+        });
+      }
 
       prevPageButton.addEventListener("click", async function () {
         if (state.page <= 1 || !state.key) {

@@ -1,6 +1,8 @@
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const rateLimit = require("express-rate-limit");
 const nodemailer = require("nodemailer");
@@ -12,6 +14,7 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
 const BACKUP_CRON = process.env.BACKUP_CRON || "*/15 * * * *";
+const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || ADMIN_KEY || "change-this-auth-secret";
 const usePostgres = Boolean(DATABASE_URL);
 const startTime = Date.now();
 
@@ -30,6 +33,8 @@ const EMAIL_CONFIG = {
 
 const dbPath = path.join(__dirname, "inquiries.json");
 const auditPath = path.join(__dirname, "audit-log.json");
+const usersPath = path.join(__dirname, "users.json");
+const userProgressPath = path.join(__dirname, "user-progress.json");
 const uploadsDir = path.join(__dirname, "uploads");
 const backupsDir = path.join(__dirname, "backups");
 
@@ -269,6 +274,8 @@ async function initStorage() {
   if (!usePostgres) {
     ensureJsonFile(dbPath, "[]");
     ensureJsonFile(auditPath, "[]");
+    ensureJsonFile(usersPath, "[]");
+    ensureJsonFile(userProgressPath, "[]");
     console.log("Using local JSON storage for inquiries.");
     return;
   }
@@ -312,6 +319,28 @@ async function initStorage() {
       previous_status TEXT,
       new_status TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_project_progress (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      project_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      percent_complete INTEGER NOT NULL DEFAULT 0,
+      summary TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
@@ -859,6 +888,281 @@ async function runBackup(reason = "scheduled") {
   });
 }
 
+function toPublicUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    created_at: user.created_at
+  };
+}
+
+function signUserToken(user) {
+  return jwt.sign(
+    {
+      sub: user.id,
+      username: user.username,
+      email: user.email
+    },
+    AUTH_JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+}
+
+function getBearerToken(req) {
+  const header = req.headers.authorization || "";
+  if (!header.startsWith("Bearer ")) {
+    return "";
+  }
+
+  return header.slice(7).trim();
+}
+
+async function findUserById(id) {
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    return users.find((item) => item.id === id) || null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, username, email, password_hash, created_at
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function findUserByIdentity(identity) {
+  const normalized = String(identity || "").trim().toLowerCase();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    return users.find((item) => item.username.toLowerCase() === normalized || item.email.toLowerCase() === normalized) || null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, username, email, password_hash, created_at
+      FROM users
+      WHERE LOWER(username) = $1 OR LOWER(email) = $1
+      LIMIT 1
+    `,
+    [normalized]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function createUserAccount({ username, email, passwordHash }) {
+  const normalizedUsername = String(username || "").trim();
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const existing = users.find((item) => item.username.toLowerCase() === normalizedUsername.toLowerCase() || item.email.toLowerCase() === normalizedEmail);
+
+    if (existing) {
+      return null;
+    }
+
+    const nextId = users.length ? users[0].id + 1 : 1;
+    const row = {
+      id: nextId,
+      username: normalizedUsername,
+      email: normalizedEmail,
+      password_hash: passwordHash,
+      created_at: nowIso()
+    };
+
+    users.unshift(row);
+    writeJsonArray(usersPath, users);
+    return row;
+  }
+
+  const result = await pool.query(
+    `
+      INSERT INTO users (username, email, password_hash)
+      VALUES ($1, $2, $3)
+      ON CONFLICT DO NOTHING
+      RETURNING id, username, email, password_hash, created_at
+    `,
+    [normalizedUsername, normalizedEmail, passwordHash]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function ensureStarterProject(userId) {
+  if (!usePostgres) {
+    const projects = readJsonArray(userProgressPath);
+    const exists = projects.some((item) => item.user_id === userId);
+
+    if (exists) {
+      return;
+    }
+
+    const nextId = projects.length ? projects[0].id + 1 : 1;
+    projects.unshift({
+      id: nextId,
+      user_id: userId,
+      project_name: "Initial Discovery",
+      status: "Planning",
+      percent_complete: 15,
+      summary: "Requirements collected and project timeline drafted.",
+      updated_at: nowIso()
+    });
+
+    writeJsonArray(userProgressPath, projects);
+    return;
+  }
+
+  const existing = await pool.query("SELECT id FROM user_project_progress WHERE user_id = $1 LIMIT 1", [userId]);
+  if (existing.rows[0]) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO user_project_progress (user_id, project_name, status, percent_complete, summary, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+    `,
+    [
+      userId,
+      "Initial Discovery",
+      "Planning",
+      15,
+      "Requirements collected and project timeline drafted."
+    ]
+  );
+}
+
+async function listUserProjects(userId) {
+  if (!usePostgres) {
+    const projects = readJsonArray(userProgressPath);
+    return projects
+      .filter((item) => item.user_id === userId)
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, user_id, project_name, status, percent_complete, summary, updated_at
+      FROM user_project_progress
+      WHERE user_id = $1
+      ORDER BY updated_at DESC, id DESC
+    `,
+    [userId]
+  );
+
+  return result.rows;
+}
+
+async function upsertUserProjectProgress({ userId, projectName, status, percentComplete, summary }) {
+  const safePercent = Math.max(0, Math.min(100, Number(percentComplete || 0)));
+  const nextStatus = String(status || "Planning").trim() || "Planning";
+  const nextSummary = String(summary || "").trim() || "Progress updated.";
+  const nextProjectName = String(projectName || "").trim() || "Project";
+
+  if (!usePostgres) {
+    const items = readJsonArray(userProgressPath);
+    const existingIndex = items.findIndex((item) => item.user_id === userId && item.project_name.toLowerCase() === nextProjectName.toLowerCase());
+
+    if (existingIndex === -1) {
+      const nextId = items.length ? items[0].id + 1 : 1;
+      const row = {
+        id: nextId,
+        user_id: userId,
+        project_name: nextProjectName,
+        status: nextStatus,
+        percent_complete: safePercent,
+        summary: nextSummary,
+        updated_at: nowIso()
+      };
+      items.unshift(row);
+      writeJsonArray(userProgressPath, items);
+      return row;
+    }
+
+    items[existingIndex] = {
+      ...items[existingIndex],
+      status: nextStatus,
+      percent_complete: safePercent,
+      summary: nextSummary,
+      updated_at: nowIso()
+    };
+
+    writeJsonArray(userProgressPath, items);
+    return items[existingIndex];
+  }
+
+  const existing = await pool.query(
+    `
+      SELECT id
+      FROM user_project_progress
+      WHERE user_id = $1 AND LOWER(project_name) = LOWER($2)
+      LIMIT 1
+    `,
+    [userId, nextProjectName]
+  );
+
+  if (!existing.rows[0]) {
+    const insertResult = await pool.query(
+      `
+        INSERT INTO user_project_progress (user_id, project_name, status, percent_complete, summary, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        RETURNING id, user_id, project_name, status, percent_complete, summary, updated_at
+      `,
+      [userId, nextProjectName, nextStatus, safePercent, nextSummary]
+    );
+
+    return insertResult.rows[0];
+  }
+
+  const updateResult = await pool.query(
+    `
+      UPDATE user_project_progress
+      SET status = $1, percent_complete = $2, summary = $3, updated_at = NOW()
+      WHERE id = $4
+      RETURNING id, user_id, project_name, status, percent_complete, summary, updated_at
+    `,
+    [nextStatus, safePercent, nextSummary, existing.rows[0].id]
+  );
+
+  return updateResult.rows[0];
+}
+
+async function requireUser(req, res, next) {
+  const token = getBearerToken(req);
+
+  if (!token) {
+    return res.status(401).json({ ok: false, message: "Authentication required." });
+  }
+
+  try {
+    const decoded = jwt.verify(token, AUTH_JWT_SECRET);
+    const userId = Number(decoded.sub);
+    const user = await findUserById(userId);
+
+    if (!user) {
+      return res.status(401).json({ ok: false, message: "Invalid authentication token." });
+    }
+
+    req.authUser = user;
+    return next();
+  } catch (_error) {
+    return res.status(401).json({ ok: false, message: "Invalid authentication token." });
+  }
+}
+
 async function checkStorageHealth() {
   try {
     if (usePostgres) {
@@ -895,6 +1199,17 @@ const contactLimiter = rateLimit({
   message: {
     ok: false,
     message: "Too many requests from this IP. Please try again shortly."
+  }
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    message: "Too many authentication attempts. Please try again later."
   }
 });
 
@@ -938,6 +1253,10 @@ if (!ADMIN_KEY) {
   console.warn("ADMIN_KEY is not set. Admin endpoints will be unavailable until configured.");
 }
 
+if (!process.env.AUTH_JWT_SECRET) {
+  console.warn("AUTH_JWT_SECRET is not set. Configure a strong secret for production account security.");
+}
+
 app.get("/health", (_req, res) => {
   return res.status(200).json({ ok: true });
 });
@@ -958,6 +1277,144 @@ app.get("/health/details", (_req, res) => {
 
 app.get("/admin", (_req, res) => {
   return res.redirect("/admin.html");
+});
+
+app.get("/account", (_req, res) => {
+  return res.redirect("/account.html");
+});
+
+app.post("/api/auth/register", authLimiter, async (req, res) => {
+  const username = String(req.body.username || "").trim();
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ ok: false, message: "Username, email, and password are required." });
+  }
+
+  if (username.length < 3 || username.length > 32) {
+    return res.status(400).json({ ok: false, message: "Username must be 3-32 characters." });
+  }
+
+  if (!/^[a-zA-Z0-9_.-]+$/.test(username)) {
+    return res.status(400).json({ ok: false, message: "Username may include letters, numbers, underscore, hyphen, and dot." });
+  }
+
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(400).json({ ok: false, message: "Please enter a valid email address." });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ ok: false, message: "Password must be at least 8 characters." });
+  }
+
+  try {
+    const existing = await findUserByIdentity(username) || await findUserByIdentity(email);
+    if (existing) {
+      return res.status(409).json({ ok: false, message: "An account with this username or email already exists." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await createUserAccount({ username, email, passwordHash });
+
+    if (!user) {
+      return res.status(409).json({ ok: false, message: "Unable to create account with these details." });
+    }
+
+    await ensureStarterProject(user.id);
+
+    const token = signUserToken(user);
+    return res.json({ ok: true, token, user: toPublicUser(user) });
+  } catch (error) {
+    console.error("Failed to register user", error);
+    return res.status(500).json({ ok: false, message: "Unable to create account right now." });
+  }
+});
+
+app.post("/api/auth/login", authLimiter, async (req, res) => {
+  const identity = String(req.body.identity || req.body.username || req.body.email || "").trim();
+  const password = String(req.body.password || "");
+
+  if (!identity || !password) {
+    return res.status(400).json({ ok: false, message: "Username/email and password are required." });
+  }
+
+  try {
+    const user = await findUserByIdentity(identity);
+
+    if (!user) {
+      return res.status(401).json({ ok: false, message: "Invalid login credentials." });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ ok: false, message: "Invalid login credentials." });
+    }
+
+    const token = signUserToken(user);
+    return res.json({ ok: true, token, user: toPublicUser(user) });
+  } catch (error) {
+    console.error("Failed to login user", error);
+    return res.status(500).json({ ok: false, message: "Unable to login right now." });
+  }
+});
+
+app.get("/api/auth/me", requireUser, async (req, res) => {
+  return res.json({ ok: true, user: toPublicUser(req.authUser) });
+});
+
+app.get("/api/user/progress", requireUser, async (req, res) => {
+  try {
+    const projects = await listUserProjects(req.authUser.id);
+    return res.json({ ok: true, projects });
+  } catch (error) {
+    console.error("Failed to load user progress", error);
+    return res.status(500).json({ ok: false, message: "Unable to load project progress right now." });
+  }
+});
+
+app.post("/api/admin/user-progress", requireAdmin, async (req, res) => {
+  const identity = String(req.body.identity || req.body.username || req.body.email || "").trim();
+  const projectName = String(req.body.projectName || "").trim();
+  const status = String(req.body.status || "").trim();
+  const summary = String(req.body.summary || "").trim();
+  const percentComplete = Number(req.body.percentComplete);
+
+  if (!identity || !projectName || !summary || !Number.isFinite(percentComplete)) {
+    return res.status(400).json({
+      ok: false,
+      message: "identity, projectName, summary, and percentComplete are required."
+    });
+  }
+
+  try {
+    const user = await findUserByIdentity(identity);
+    if (!user) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    const project = await upsertUserProjectProgress({
+      userId: user.id,
+      projectName,
+      status,
+      percentComplete,
+      summary
+    });
+
+    await addAuditEntry({
+      action: "user-progress-upsert",
+      changedFields: {
+        user_id: user.id,
+        project_name: project.project_name,
+        percent_complete: project.percent_complete
+      }
+    });
+
+    return res.json({ ok: true, project });
+  } catch (error) {
+    console.error("Failed to upsert user project progress", error);
+    return res.status(500).json({ ok: false, message: "Unable to update user project progress right now." });
+  }
 });
 
 app.post("/api/inquiries", contactLimiter, (req, res, next) => {

@@ -432,7 +432,8 @@ textarea:focus-visible {
 }
 
 .admin-filters input,
-.admin-filters select {
+.admin-filters select,
+.admin-filters textarea {
   width: 100%;
   background: var(--input-bg);
   border: 1px solid var(--border);
@@ -480,6 +481,197 @@ textarea:focus-visible {
   align-items: center;
   gap: 0.6rem;
   margin-top: 0.8rem;
+}
+
+.api-snippet-wrap {
+  margin-top: 1rem;
+}
+
+.api-snippet-title {
+  margin: 0 0 0.45rem;
+  font-weight: 700;
+}
+
+.api-snippet {
+  margin: 0 0 0.65rem;
+  padding: 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+body.menu-open {
+  overflow: hidden;
+}
+
+.menu-toggle-btn {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 1200;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.menu-toggle-btn span {
+  display: block;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
+.side-menu-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 1180;
+}
+
+.side-menu-overlay.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.side-menu-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: min(320px, 84vw);
+  height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  transform: translateX(-102%);
+  transition: transform 0.22s ease;
+  z-index: 1190;
+  display: flex;
+  flex-direction: column;
+}
+
+.side-menu-panel.is-open {
+  transform: translateX(0);
+}
+
+.side-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.side-menu-head h4 {
+  margin: 0;
+}
+
+.side-menu-close {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 1.1rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.side-menu-links {
+  padding: 0.7rem 0.8rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.side-menu-link {
+  display: block;
+  padding: 0.58rem 0.65rem;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  border: 1px solid transparent;
+}
+
+.side-menu-link:hover {
+  background: color-mix(in srgb, var(--blue-lighter) 20%, transparent);
+  border-color: var(--border);
+}
+
+.side-menu-footer {
+  margin-top: auto;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.side-menu-user {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.side-menu-logout {
+  width: 100%;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.account-form label {
+  display: block;
+  margin: 0.55rem 0 0.3rem;
+  font-weight: 600;
+}
+
+.account-form input {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.6rem 0.65rem;
+}
+
+.progress-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.progress-track {
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue-lighter) 22%, var(--surface));
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), var(--blue-soft));
+}
+
+.progress-updated {
+  color: var(--muted);
+  font-size: 0.86rem;
 }
 
 footer {

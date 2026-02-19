@@ -2,5 +2,7 @@ node_modules/
 .env
 inquiries.json
 audit-log.json
+users.json
+user-progress.json
 backups/
 uploads/
