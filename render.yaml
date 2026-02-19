@@ -23,3 +23,5 @@ services:
         generateValue: true
       - key: TRUST_PROXY
         value: 1
+      - key: BACKLOG_FLUSH_CRON
+        value: "*/2 * * * *"

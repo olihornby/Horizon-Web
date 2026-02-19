@@ -45,6 +45,9 @@ Use these URLs after deploy:
 
 - The contact form supports optional file attachments (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.txt`, `.doc`, `.docx`, max 5MB) and is saved by `POST /api/inquiries`.
 - Contact form includes anti-spam protections (IP rate limiting + honeypot field).
+- The contact page now uses request timeouts and explicit success/error states so users are not left in a loading state.
+- If primary inquiry storage is temporarily unavailable, the backend queues submissions in `inquiry-backlog.json` and retries automatically.
+- If the browser cannot reach the server, non-attachment submissions are queued in local browser storage and auto-retried when connectivity returns.
 - In production (when `DATABASE_URL` exists), inquiries are stored in PostgreSQL and persist through code pushes/redeploys.
 - In local development (without `DATABASE_URL`), inquiries are stored in `inquiries.json`.
 - Automated backups run every 15 minutes (recommended default) and are written to `/backups` as JSON + CSV snapshots.
@@ -73,6 +76,11 @@ As long as the service still uses the same database, your inquiry history stays 
 - Delete inquiry with confirmation
 - Attachment download links in the admin table
 - Analytics summary cards and activity audit feed
+- Backlog status + manual backlog flush controls in the admin page
+
+Backlog admin APIs (admin key required):
+- `GET /api/admin/inquiries/backlog`
+- `POST /api/admin/inquiries/backlog/flush` (optional JSON body: `{ "limit": 100 }`)
 
 ## Client portal features
 
@@ -106,11 +114,20 @@ Set these in your deployment platform to enable email notifications and monitori
 - `SMTP_FROM` (optional, defaults to `SMTP_USER`)
 - `NOTIFY_EMAIL` (recipient for new inquiry notifications)
 - `ALERT_EMAIL` (recipient for health-alert emails)
+- `SMTP_CONNECTION_TIMEOUT_MS` (optional, default `10000`)
+- `SMTP_SOCKET_TIMEOUT_MS` (optional, default `10000`)
+- `SMTP_RETRY_COOLDOWN_MS` (optional, default `300000`; temporary pause after timeout errors)
 - `BACKUP_CRON` (optional cron override for backup frequency; default is `*/15 * * * *`)
+- `BACKLOG_FLUSH_CRON` (optional cron override for queued inquiry retry frequency; default is `*/2 * * * *`)
 - `AUTH_JWT_SECRET` (recommended in production for account session token signing)
 - `TRUST_PROXY` (recommended for reverse-proxy hosts; set `1` on Render so rate limits use real client IPs)
 
 If SMTP values are not provided, the app still works but email notifications/alerts are disabled.
+
+If you see `ETIMEDOUT` from Nodemailer on Render, your SMTP host/port is unreachable or blocked. In that case:
+- Verify `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, and `SMTP_PASS` exactly match your provider docs.
+- Use provider-supported submission ports (`587` with `SMTP_SECURE=false`, or `465` with `SMTP_SECURE=true`).
+- Confirm your provider allows connections from Render's region/IP ranges.
 
 ## Accessibility (WCAG AA) verification checklist
 

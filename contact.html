@@ -96,10 +96,142 @@
     (function () {
       const form = document.getElementById("support-form");
       const statusElement = document.getElementById("form-status");
+      const outboxKey = "horizonInquiryOutboxV1";
+      const requestTimeoutMs = 15000;
+      const allowedAttachmentTypes = [
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "text/plain",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      ];
+      const maxAttachmentSize = 5 * 1024 * 1024;
+      let isFlushingOutbox = false;
 
       if (!form || !statusElement) {
         return;
       }
+
+      function setStatus(message, type) {
+        statusElement.textContent = message;
+        statusElement.className = "form-status " + type;
+      }
+
+      function loadOutbox() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(outboxKey) || "[]");
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function saveOutbox(items) {
+        localStorage.setItem(outboxKey, JSON.stringify(items));
+      }
+
+      function queueOutboxItem(item) {
+        const items = loadOutbox();
+        items.push({
+          ...item,
+          queuedAt: new Date().toISOString()
+        });
+        saveOutbox(items);
+      }
+
+      function buildSerializablePayload() {
+        return {
+          fullName: (form.querySelector("#full-name")?.value || "").trim(),
+          company: (form.querySelector("#company")?.value || "").trim(),
+          email: (form.querySelector("#email")?.value || "").trim(),
+          serviceType: (form.querySelector("#service-type")?.value || "").trim(),
+          details: (form.querySelector("#details")?.value || "").trim(),
+          website: (form.querySelector("#website")?.value || "").trim()
+        };
+      }
+
+      function postWithTimeout(url, options, timeoutMs) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(function () {
+          controller.abort();
+        }, timeoutMs);
+
+        return fetch(url, {
+          ...options,
+          signal: controller.signal
+        }).finally(function () {
+          clearTimeout(timeoutId);
+        });
+      }
+
+      async function sendPayload(payload) {
+        const ajaxAction = form.getAttribute("data-ajax-action");
+        const body = new FormData();
+        body.append("full-name", payload.fullName);
+        body.append("company", payload.company);
+        body.append("email", payload.email);
+        body.append("service-type", payload.serviceType);
+        body.append("details", payload.details);
+        body.append("website", payload.website || "");
+
+        const response = await postWithTimeout(ajaxAction, {
+          method: "POST",
+          body,
+          headers: {
+            Accept: "application/json"
+          }
+        }, requestTimeoutMs);
+
+        const payloadResponse = await response.json().catch(function () {
+          return { ok: false, message: "Request failed" };
+        });
+
+        if (!response.ok || !payloadResponse.ok) {
+          throw new Error(payloadResponse.message || "Request failed");
+        }
+
+        return payloadResponse;
+      }
+
+      async function flushOutbox() {
+        if (isFlushingOutbox) {
+          return;
+        }
+
+        const queuedItems = loadOutbox();
+        if (!queuedItems.length) {
+          return;
+        }
+
+        isFlushingOutbox = true;
+        const remaining = [];
+        let sentCount = 0;
+
+        for (const item of queuedItems) {
+          try {
+            await sendPayload(item);
+            sentCount += 1;
+          } catch (_error) {
+            remaining.push(item);
+          }
+        }
+
+        saveOutbox(remaining);
+        isFlushingOutbox = false;
+
+        if (sentCount > 0) {
+          setStatus("Previously queued request(s) were sent successfully.", "form-status-success");
+        }
+      }
+
+      window.addEventListener("online", function () {
+        void flushOutbox();
+      });
+
+      setTimeout(function () {
+        void flushOutbox();
+      }, 1000);
 
       form.addEventListener("submit", async function (event) {
         event.preventDefault();
@@ -107,40 +239,81 @@
         const submitButton = form.querySelector("button[type='submit']");
         const ajaxAction = form.getAttribute("data-ajax-action");
         const formData = new FormData(form);
+        const attachmentInput = form.querySelector("#attachment");
+        const selectedFile = attachmentInput && attachmentInput.files ? attachmentInput.files[0] : null;
 
-        statusElement.textContent = "Sending your request...";
-        statusElement.className = "form-status form-status-loading";
+        if (selectedFile) {
+          if (selectedFile.size > maxAttachmentSize) {
+            setStatus("Attachment exceeds the 5MB limit. Please choose a smaller file.", "form-status-error");
+            return;
+          }
+
+          if (!allowedAttachmentTypes.includes(selectedFile.type)) {
+            setStatus("Unsupported attachment type. Please upload PDF, PNG, JPG, TXT, DOC, or DOCX.", "form-status-error");
+            return;
+          }
+        }
+
+        setStatus("Sending your request...", "form-status-loading");
 
         if (submitButton) {
           submitButton.disabled = true;
         }
 
         try {
-          const response = await fetch(ajaxAction, {
+          const response = await postWithTimeout(ajaxAction, {
             method: "POST",
             body: formData,
             headers: {
               Accept: "application/json"
             }
-          });
+          }, requestTimeoutMs);
 
           const payload = await response.json().catch(function () {
             return { ok: false, message: "Request failed" };
           });
 
           if (!response.ok || !payload.ok) {
-            throw new Error(payload.message || "Request failed");
+            const requestError = new Error(payload.message || "Request failed");
+            requestError.status = response.status;
+            throw requestError;
           }
 
-          statusElement.textContent = "Thanks! Your request was sent successfully. We will reply within one business day.";
-          statusElement.className = "form-status form-status-success";
+          if (payload.queued) {
+            setStatus("Your request has been queued safely and will send automatically when service is available.", "form-status-success");
+          } else {
+            setStatus("Thanks! Your request was sent successfully. We will reply within one business day.", "form-status-success");
+          }
+
           form.reset();
           setTimeout(function () {
             window.location.href = "thanks.html";
-          }, 1000);
+          }, 1200);
         } catch (error) {
-          statusElement.innerHTML = (error && error.message ? error.message + " " : "") + "Please try again or email <a href=\"mailto:Inquiries@Horizon-Industries.com\">Inquiries@Horizon-Industries.com</a> or <a href=\"mailto:oli.enbie307@gmail.com\">oli.enbie307@gmail.com</a>.";
-          statusElement.className = "form-status form-status-error";
+          const hasAttachment = Boolean(selectedFile);
+          const isTransientFailure =
+            (error && error.name === "AbortError") ||
+            (error && Number(error.status) >= 500) ||
+            error instanceof TypeError;
+
+          if (!hasAttachment && isTransientFailure) {
+            queueOutboxItem(buildSerializablePayload());
+            setStatus(
+              "Server is temporarily unavailable. Your request was saved in this browser and will auto-send when connection returns.",
+              "form-status-success"
+            );
+          } else if (error && error.name === "AbortError") {
+            setStatus(
+              "The request timed out. Please try again, or submit without attachment if your connection is unstable.",
+              "form-status-error"
+            );
+          } else {
+            setStatus(
+              (error && error.message ? error.message + " " : "") +
+                "Please try again or email Inquiries@Horizon-Industries.com or oli.enbie307@gmail.com.",
+              "form-status-error"
+            );
+          }
         } finally {
           if (submitButton) {
             submitButton.disabled = false;

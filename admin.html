@@ -52,6 +52,14 @@
           <p id="monitor-text">No monitoring data yet.</p>
         </section>
 
+        <section class="card admin-panel" id="backlog-panel">
+          <h4>Inquiry Backlog</h4>
+          <p id="backlog-text">Load inquiries to view backlog status.</p>
+          <div class="admin-filter-actions">
+            <button class="btn btn-submit" type="button" id="flush-backlog-btn">Flush Backlog Now</button>
+          </div>
+        </section>
+
         <section class="card admin-panel" id="client-progress-panel">
           <h4>Update Client Project Progress</h4>
           <form id="progress-form" class="admin-filters" autocomplete="off">
@@ -220,6 +228,8 @@
       const metricProgress = document.getElementById("metric-progress");
       const metricResolved = document.getElementById("metric-resolved");
       const monitorText = document.getElementById("monitor-text");
+      const backlogText = document.getElementById("backlog-text");
+      const flushBacklogButton = document.getElementById("flush-backlog-btn");
 
       const state = {
         key: "",
@@ -428,9 +438,28 @@
         }
       }
 
+      async function loadBacklogStatus() {
+        if (!state.key) {
+          backlogText.textContent = "Load inquiries to view backlog status.";
+          return;
+        }
+
+        try {
+          const payload = await fetchJson("/api/admin/inquiries/backlog");
+          const backlog = payload.backlog || {};
+          backlogText.textContent =
+            "Pending: " + String(backlog.pending || 0) +
+            ". Oldest queued: " + (backlog.oldestQueuedAt || "n/a") +
+            ". Last flush: " + (backlog.lastFlushAt || "n/a") +
+            (backlog.lastFlushError ? ". Last flush error: " + backlog.lastFlushError : "");
+        } catch (_error) {
+          backlogText.textContent = "Unable to load backlog status.";
+        }
+      }
+
       async function refreshAll() {
         await loadInquiries();
-        await Promise.all([loadAnalytics(), loadAudit(), loadMonitoring()]);
+        await Promise.all([loadAnalytics(), loadAudit(), loadMonitoring(), loadBacklogStatus()]);
       }
 
       form.addEventListener("submit", async function (event) {
@@ -573,6 +602,41 @@
             setStatus("All client accounts and progress records were reset.", "form-status-success");
           } catch (error) {
             setStatus(error.message || "Unable to reset accounts.", "form-status-error");
+          }
+        });
+      }
+
+      if (flushBacklogButton) {
+        flushBacklogButton.addEventListener("click", async function () {
+          if (!state.key) {
+            setStatus("Load inquiries first with your admin key.", "form-status-error");
+            return;
+          }
+
+          flushBacklogButton.disabled = true;
+          setStatus("Flushing backlog...", "form-status-loading");
+
+          try {
+            const payload = await fetchJson("/api/admin/inquiries/backlog/flush", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ limit: 100 })
+            });
+
+            const result = payload.result || {};
+            setStatus(
+              "Backlog flush complete. Flushed " + String(result.flushed || 0) +
+              " / attempted " + String(result.attempted || 0) +
+              ". Remaining: " + String(result.remaining || 0) + ".",
+              "form-status-success"
+            );
+
+            await Promise.all([loadBacklogStatus(), loadInquiries(), loadAudit(), loadAnalytics(), loadMonitoring()]);
+          } catch (error) {
+            setStatus(error.message || "Unable to flush backlog.", "form-status-error");
+            await loadBacklogStatus();
+          } finally {
+            flushBacklogButton.disabled = false;
           }
         });
       }

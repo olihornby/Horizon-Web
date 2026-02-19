@@ -15,9 +15,13 @@ const ADMIN_KEY = process.env.ADMIN_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
 const TRUST_PROXY = process.env.TRUST_PROXY;
 const BACKUP_CRON = process.env.BACKUP_CRON || "*/15 * * * *";
+const BACKLOG_FLUSH_CRON = process.env.BACKLOG_FLUSH_CRON || "*/2 * * * *";
 const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || ADMIN_KEY || "change-this-auth-secret";
 const usePostgres = Boolean(DATABASE_URL);
 const startTime = Date.now();
+const SMTP_CONNECTION_TIMEOUT_MS = Math.max(1000, Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000));
+const SMTP_SOCKET_TIMEOUT_MS = Math.max(1000, Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 10000));
+const SMTP_RETRY_COOLDOWN_MS = Math.max(0, Number(process.env.SMTP_RETRY_COOLDOWN_MS || 300000));
 
 function resolveTrustProxySetting() {
   if (!TRUST_PROXY || !TRUST_PROXY.trim()) {
@@ -60,6 +64,7 @@ const EMAIL_CONFIG = {
 
 const dbPath = path.join(__dirname, "inquiries.json");
 const auditPath = path.join(__dirname, "audit-log.json");
+const inquiryBacklogPath = path.join(__dirname, "inquiry-backlog.json");
 const usersPath = path.join(__dirname, "users.json");
 const userProgressPath = path.join(__dirname, "user-progress.json");
 const uploadsDir = path.join(__dirname, "uploads");
@@ -67,11 +72,15 @@ const backupsDir = path.join(__dirname, "backups");
 
 let pool = null;
 let mailer = null;
+let mailerCooldownUntil = 0;
 
 const monitorState = {
   storageHealthy: true,
   lastStorageCheckAt: null,
   lastStorageError: null,
+  backlogPending: 0,
+  lastBacklogFlushAt: null,
+  lastBacklogFlushError: null,
   lastBackupAt: null,
   lastBackupError: null,
   lastAlertAt: null
@@ -231,6 +240,9 @@ function createMailer() {
     host: EMAIL_CONFIG.host,
     port: EMAIL_CONFIG.port,
     secure: EMAIL_CONFIG.secure,
+    connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+    greetingTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+    socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
     auth: {
       user: EMAIL_CONFIG.user,
       pass: EMAIL_CONFIG.pass
@@ -240,15 +252,35 @@ function createMailer() {
 
 async function sendEmail({ to, subject, text }) {
   if (!mailer || !to) {
-    return;
+    return false;
   }
 
-  await mailer.sendMail({
-    from: EMAIL_CONFIG.from,
-    to,
-    subject,
-    text
-  });
+  if (Date.now() < mailerCooldownUntil) {
+    return false;
+  }
+
+  try {
+    await mailer.sendMail({
+      from: EMAIL_CONFIG.from,
+      to,
+      subject,
+      text
+    });
+
+    return true;
+  } catch (error) {
+    const code = String(error && error.code ? error.code : "");
+    if (["ETIMEDOUT", "ESOCKET", "ECONNECTION"].includes(code)) {
+      mailerCooldownUntil = Date.now() + SMTP_RETRY_COOLDOWN_MS;
+    }
+
+    console.error("Email send failed", {
+      code: code || "UNKNOWN",
+      message: error && error.message ? error.message : "Unknown email error"
+    });
+
+    return false;
+  }
 }
 
 async function notifyNewInquiry(row) {
@@ -266,15 +298,11 @@ async function notifyNewInquiry(row) {
     `Created: ${row.created_at}`
   ].join("\n");
 
-  try {
-    await sendEmail({
-      to: EMAIL_CONFIG.notifyTo,
-      subject: `New Inquiry #${row.id} - ${row.request_type}`,
-      text
-    });
-  } catch (error) {
-    console.error("Failed to send inquiry notification email", error);
-  }
+  await sendEmail({
+    to: EMAIL_CONFIG.notifyTo,
+    subject: `New Inquiry #${row.id} - ${row.request_type}`,
+    text
+  });
 }
 
 async function sendMonitoringAlert(isHealthy, message) {
@@ -282,21 +310,21 @@ async function sendMonitoringAlert(isHealthy, message) {
     return;
   }
 
-  try {
-    await sendEmail({
-      to: EMAIL_CONFIG.alertTo,
-      subject: isHealthy ? "Horizon monitor recovered" : "Horizon monitor alert",
-      text: `${message}\n\nTime: ${nowIso()}`
-    });
+  const delivered = await sendEmail({
+    to: EMAIL_CONFIG.alertTo,
+    subject: isHealthy ? "Horizon monitor recovered" : "Horizon monitor alert",
+    text: `${message}\n\nTime: ${nowIso()}`
+  });
+
+  if (delivered) {
     monitorState.lastAlertAt = nowIso();
-  } catch (error) {
-    console.error("Failed to send monitoring alert", error);
   }
 }
 
 async function initStorage() {
   ensureDir(uploadsDir);
   ensureDir(backupsDir);
+  ensureJsonFile(inquiryBacklogPath, "[]");
 
   if (!usePostgres) {
     ensureJsonFile(dbPath, "[]");
@@ -475,6 +503,94 @@ async function addInquiry(inquiry) {
   );
 
   return result.rows[0];
+}
+
+function queueInquiryBacklog(payload, errorMessage) {
+  const items = readJsonArray(inquiryBacklogPath);
+  const nextId = items.length ? Math.max(...items.map((item) => Number(item.id) || 0)) + 1 : 1;
+
+  const row = {
+    id: nextId,
+    payload,
+    attempts: 0,
+    queued_at: nowIso(),
+    last_attempt_at: null,
+    last_error: errorMessage || null
+  };
+
+  items.push(row);
+  writeJsonArray(inquiryBacklogPath, items);
+  monitorState.backlogPending = items.length;
+  return row;
+}
+
+async function flushInquiryBacklog(maxItems = 25) {
+  const queue = readJsonArray(inquiryBacklogPath);
+  if (!queue.length) {
+    monitorState.backlogPending = 0;
+    return { flushed: 0, attempted: 0, remaining: 0 };
+  }
+
+  const remaining = [];
+  let flushed = 0;
+  let attempted = 0;
+
+  for (let i = 0; i < queue.length; i += 1) {
+    const item = queue[i];
+
+    if (attempted >= maxItems) {
+      remaining.push(item);
+      continue;
+    }
+
+    attempted += 1;
+
+    try {
+      const savedRow = await addInquiry(item.payload);
+
+      await addAuditEntry({
+        inquiryId: savedRow.id,
+        action: "create-from-backlog",
+        newStatus: "new",
+        changedFields: {
+          backlog_id: item.id,
+          has_attachment: Boolean(savedRow.attachment_stored_name)
+        }
+      });
+
+      void notifyNewInquiry(savedRow);
+      flushed += 1;
+    } catch (error) {
+      const failedItem = {
+        ...item,
+        attempts: Number(item.attempts || 0) + 1,
+        last_attempt_at: nowIso(),
+        last_error: error && error.message ? error.message : "Failed to flush backlog item"
+      };
+
+      remaining.push(failedItem);
+
+      for (let j = i + 1; j < queue.length; j += 1) {
+        remaining.push(queue[j]);
+      }
+
+      monitorState.lastBacklogFlushError = failedItem.last_error;
+      break;
+    }
+  }
+
+  writeJsonArray(inquiryBacklogPath, remaining);
+  monitorState.backlogPending = remaining.length;
+  monitorState.lastBacklogFlushAt = nowIso();
+  if (!remaining.length || flushed > 0) {
+    monitorState.lastBacklogFlushError = null;
+  }
+
+  return {
+    flushed,
+    attempted,
+    remaining: remaining.length
+  };
 }
 
 function matchesFilters(row, filters) {
@@ -1343,6 +1459,9 @@ app.get("/health/details", (_req, res) => {
     storage_healthy: monitorState.storageHealthy,
     last_storage_check_at: monitorState.lastStorageCheckAt,
     last_storage_error: monitorState.lastStorageError,
+    backlog_pending: monitorState.backlogPending,
+    last_backlog_flush_at: monitorState.lastBacklogFlushAt,
+    last_backlog_flush_error: monitorState.lastBacklogFlushError,
     last_backup_at: monitorState.lastBackupAt,
     last_backup_error: monitorState.lastBackupError,
     last_alert_at: monitorState.lastAlertAt
@@ -1518,6 +1637,51 @@ app.post("/api/admin/users/reset", requireAdmin, async (_req, res) => {
   }
 });
 
+app.get("/api/admin/inquiries/backlog", requireAdmin, async (_req, res) => {
+  try {
+    const queue = readJsonArray(inquiryBacklogPath);
+    const oldest = queue.length ? queue[0] : null;
+
+    monitorState.backlogPending = queue.length;
+
+    return res.json({
+      ok: true,
+      backlog: {
+        pending: queue.length,
+        oldestQueuedAt: oldest ? oldest.queued_at : null,
+        lastFlushAt: monitorState.lastBacklogFlushAt,
+        lastFlushError: monitorState.lastBacklogFlushError
+      }
+    });
+  } catch (error) {
+    console.error("Failed to read inquiry backlog status", error);
+    return res.status(500).json({ ok: false, message: "Unable to read inquiry backlog status." });
+  }
+});
+
+app.post("/api/admin/inquiries/backlog/flush", requireAdmin, async (req, res) => {
+  const requestedLimit = Number(req.body.limit);
+  const limit = Number.isFinite(requestedLimit) ? Math.min(500, Math.max(1, Math.floor(requestedLimit))) : 100;
+
+  try {
+    const result = await flushInquiryBacklog(limit);
+
+    await addAuditEntry({
+      action: "backlog-flush-manual",
+      changedFields: {
+        attempted: result.attempted,
+        flushed: result.flushed,
+        remaining: result.remaining
+      }
+    });
+
+    return res.json({ ok: true, result });
+  } catch (error) {
+    console.error("Failed to flush inquiry backlog", error);
+    return res.status(500).json({ ok: false, message: "Unable to flush inquiry backlog right now." });
+  }
+});
+
 app.post("/api/inquiries", contactLimiter, (req, res, next) => {
   upload.single("attachment")(req, res, (err) => {
     if (err) {
@@ -1552,17 +1716,18 @@ app.post("/api/inquiries", contactLimiter, (req, res, next) => {
   }
 
   const createdAt = nowIso();
+  const inquiryPayload = {
+    fullName,
+    company,
+    email,
+    requestType,
+    details,
+    createdAt,
+    ...mapFileMeta(req.file)
+  };
 
   try {
-    const savedRow = await addInquiry({
-      fullName,
-      company,
-      email,
-      requestType,
-      details,
-      createdAt,
-      ...mapFileMeta(req.file)
-    });
+    const savedRow = await addInquiry(inquiryPayload);
 
     await addAuditEntry({
       inquiryId: savedRow.id,
@@ -1574,11 +1739,28 @@ app.post("/api/inquiries", contactLimiter, (req, res, next) => {
       }
     });
 
-    await notifyNewInquiry(savedRow);
+    void notifyNewInquiry(savedRow);
 
     return res.json({ ok: true });
   } catch (error) {
     console.error("Failed to save inquiry", error);
+
+    try {
+      const queued = queueInquiryBacklog(
+        inquiryPayload,
+        error && error.message ? error.message : "Primary storage unavailable"
+      );
+
+      return res.status(202).json({
+        ok: true,
+        queued: true,
+        backlogId: queued.id,
+        message: "Request queued safely. It will be submitted automatically when service is available."
+      });
+    } catch (queueError) {
+      console.error("Failed to queue inquiry in backlog", queueError);
+    }
+
     return res.status(500).json({
       ok: false,
       message: "Unable to save inquiry right now."
@@ -1754,6 +1936,14 @@ initStorage()
     mailer = createMailer();
 
     await checkStorageHealth();
+    monitorState.backlogPending = readJsonArray(inquiryBacklogPath).length;
+
+    try {
+      await flushInquiryBacklog(50);
+    } catch (error) {
+      monitorState.lastBacklogFlushError = error.message;
+      console.error("Initial backlog flush failed", error);
+    }
 
     try {
       await runBackup("startup");
@@ -1771,7 +1961,17 @@ initStorage()
       }
     });
 
+    cron.schedule(BACKLOG_FLUSH_CRON, async () => {
+      try {
+        await flushInquiryBacklog(50);
+      } catch (error) {
+        monitorState.lastBacklogFlushError = error.message;
+        console.error("Scheduled backlog flush failed", error);
+      }
+    });
+
     console.log(`Backups scheduled with cron: ${BACKUP_CRON}`);
+    console.log(`Backlog flush scheduled with cron: ${BACKLOG_FLUSH_CRON}`);
 
     setInterval(() => {
       checkStorageHealth().catch((error) => {
