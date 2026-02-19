@@ -634,6 +634,51 @@ body.menu-open {
   margin-top: 1rem;
 }
 
+.account-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.dashboard-stats .card p {
+  font-size: 1.3rem;
+  margin-top: 0.4rem;
+  color: var(--text);
+}
+
+.progress-graphs {
+  margin-top: 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.9rem;
+}
+
+.graph-track {
+  height: 11px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue-lighter) 24%, var(--surface));
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.graph-track span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), var(--blue-soft));
+}
+
+.graph-track.budget span {
+  background: linear-gradient(90deg, #0ea5e9, #0284c7);
+}
+
 .account-form label {
   display: block;
   margin: 0.55rem 0 0.3rem;

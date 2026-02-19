@@ -26,7 +26,31 @@
   </header>
 
   <main>
-    <section class="section">
+    <section class="section section-alt" id="progress-section">
+      <div class="container">
+        <div class="account-headline">
+          <h3>Your Project Progress</h3>
+          <button class="btn btn-submit" type="button" id="account-logout" hidden>Log out</button>
+        </div>
+
+        <div id="dashboard-stats" class="dashboard-stats" hidden>
+          <article class="card"><h4>Projects</h4><p id="stat-projects">0</p></article>
+          <article class="card"><h4>Avg Completion</h4><p id="stat-completion">0%</p></article>
+          <article class="card"><h4>Weeks to Deadline</h4><p id="stat-weeks">-</p></article>
+          <article class="card"><h4>Budget Remaining</h4><p id="stat-budget">$0</p></article>
+        </div>
+
+        <div id="progress-graphs" class="progress-graphs" hidden></div>
+
+        <div id="progress-list" class="progress-list">
+          <article class="card">
+            <p>Log in to load your project updates.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="auth-section">
       <div class="container">
         <h3>Client Portal</h3>
         <p>Create an account or log in to track project progress.</p>
@@ -65,17 +89,6 @@
         <p id="account-status" class="form-status" aria-live="polite"></p>
       </div>
     </section>
-
-    <section class="section section-alt">
-      <div class="container">
-        <h3>Your Project Progress</h3>
-        <div id="progress-list" class="progress-list">
-          <article class="card">
-            <p>Log in to load your project updates.</p>
-          </article>
-        </div>
-      </div>
-    </section>
   </main>
 
   <footer>
@@ -90,6 +103,16 @@
       const loginForm = document.getElementById("login-form");
       const registerForm = document.getElementById("register-form");
       const progressList = document.getElementById("progress-list");
+      const progressSection = document.getElementById("progress-section");
+      const authSection = document.getElementById("auth-section");
+      const logoutButton = document.getElementById("account-logout");
+
+      const dashboardStats = document.getElementById("dashboard-stats");
+      const progressGraphs = document.getElementById("progress-graphs");
+      const statProjects = document.getElementById("stat-projects");
+      const statCompletion = document.getElementById("stat-completion");
+      const statWeeks = document.getElementById("stat-weeks");
+      const statBudget = document.getElementById("stat-budget");
 
       const auth = window.HorizonAuth;
 
@@ -98,9 +121,94 @@
         status.className = "form-status " + (cls || "");
       }
 
+      function formatCurrency(value) {
+        return new Intl.NumberFormat(undefined, {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 0
+        }).format(value || 0);
+      }
+
+      function computeWeeksToClosestDeadline(projects) {
+        const now = Date.now();
+        const futureDeadlines = projects
+          .map(function (item) {
+            return item.deadline_date ? new Date(item.deadline_date).getTime() : NaN;
+          })
+          .filter(function (ms) {
+            return Number.isFinite(ms) && ms >= now;
+          })
+          .sort(function (a, b) {
+            return a - b;
+          });
+
+        if (!futureDeadlines.length) {
+          return null;
+        }
+
+        return Math.ceil((futureDeadlines[0] - now) / (1000 * 60 * 60 * 24 * 7));
+      }
+
+      function renderStats(projects) {
+        const count = projects.length;
+        const avgCompletion = count
+          ? Math.round(projects.reduce(function (sum, item) {
+              return sum + Number(item.percent_complete || 0);
+            }, 0) / count)
+          : 0;
+
+        const totalBudget = projects.reduce(function (sum, item) {
+          return sum + Number(item.budget_total || 0);
+        }, 0);
+
+        const usedBudget = projects.reduce(function (sum, item) {
+          return sum + Number(item.budget_used || 0);
+        }, 0);
+
+        const remainingBudget = Math.max(0, totalBudget - usedBudget);
+        const weeks = computeWeeksToClosestDeadline(projects);
+
+        statProjects.textContent = String(count);
+        statCompletion.textContent = String(avgCompletion) + "%";
+        statWeeks.textContent = weeks === null ? "No deadline" : String(weeks);
+        statBudget.textContent = formatCurrency(remainingBudget);
+        dashboardStats.hidden = false;
+      }
+
+      function renderGraphs(projects) {
+        if (!projects.length) {
+          progressGraphs.hidden = true;
+          progressGraphs.innerHTML = "";
+          return;
+        }
+
+        progressGraphs.innerHTML = projects
+          .map(function (item) {
+            const completion = Math.max(0, Math.min(100, Number(item.percent_complete || 0)));
+            const total = Math.max(0, Number(item.budget_total || 0));
+            const used = Math.max(0, Number(item.budget_used || 0));
+            const budgetPct = total > 0 ? Math.max(0, Math.min(100, Math.round((used / total) * 100))) : 0;
+
+            return '<article class="card graph-card">' +
+              '<h4>' + item.project_name + '</h4>' +
+              '<p><strong>Completion</strong></p>' +
+              '<div class="graph-track"><span style="width:' + completion + '%"></span></div>' +
+              '<p>' + completion + '% complete</p>' +
+              '<p><strong>Budget Used</strong></p>' +
+              '<div class="graph-track budget"><span style="width:' + budgetPct + '%"></span></div>' +
+              '<p>' + formatCurrency(used) + ' / ' + formatCurrency(total) + '</p>' +
+            '</article>';
+          })
+          .join("");
+
+        progressGraphs.hidden = false;
+      }
+
       function renderProjects(projects) {
         if (!projects || !projects.length) {
           progressList.innerHTML = '<article class="card"><p>No project updates yet.</p></article>';
+          dashboardStats.hidden = true;
+          renderGraphs([]);
           return;
         }
 
@@ -108,9 +216,12 @@
           .map(function (item) {
             const pct = Math.max(0, Math.min(100, Number(item.percent_complete || 0)));
             const updated = new Date(item.updated_at).toLocaleString();
+            const deadline = item.deadline_date ? new Date(item.deadline_date).toLocaleDateString() : "Not set";
+
             return '<article class="card progress-card">' +
               '<h4>' + item.project_name + '</h4>' +
               '<p><strong>Status:</strong> ' + item.status + '</p>' +
+              '<p><strong>Deadline:</strong> ' + deadline + '</p>' +
               '<p>' + item.summary + '</p>' +
               '<div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '">' +
                 '<span style="width:' + pct + '%"></span>' +
@@ -120,11 +231,26 @@
             '</article>';
           })
           .join("");
+
+        renderStats(projects);
+        renderGraphs(projects);
+      }
+
+      function setLoggedInState(isLoggedIn) {
+        authSection.hidden = isLoggedIn;
+        logoutButton.hidden = !isLoggedIn;
+
+        if (isLoggedIn) {
+          progressSection.parentElement.insertBefore(progressSection, authSection);
+        } else {
+          progressSection.parentElement.appendChild(authSection);
+        }
       }
 
       async function loadMeAndProjects() {
         const token = auth.getToken();
         if (!token) {
+          setLoggedInState(false);
           renderProjects([]);
           return;
         }
@@ -132,12 +258,14 @@
         try {
           const mePayload = await auth.fetchJson("/api/auth/me");
           auth.setSession(token, mePayload.user);
+          setLoggedInState(true);
 
           const projectsPayload = await auth.fetchJson("/api/user/progress");
           renderProjects(projectsPayload.projects || []);
           setStatus("Logged in. Project progress loaded.", "form-status-success");
         } catch (error) {
           auth.clearSession();
+          setLoggedInState(false);
           renderProjects([]);
           setStatus(error.message || "Session expired. Please log in again.", "form-status-error");
         }
@@ -197,6 +325,13 @@
         } catch (error) {
           setStatus(error.message || "Unable to create account.", "form-status-error");
         }
+      });
+
+      logoutButton.addEventListener("click", function () {
+        auth.clearSession();
+        setLoggedInState(false);
+        renderProjects([]);
+        setStatus("Logged out.", "form-status-success");
       });
 
       loadMeAndProjects();

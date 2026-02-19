@@ -339,10 +339,17 @@ async function initStorage() {
       project_name TEXT NOT NULL,
       status TEXT NOT NULL,
       percent_complete INTEGER NOT NULL DEFAULT 0,
+      deadline_date DATE,
+      budget_total NUMERIC(12, 2),
+      budget_used NUMERIC(12, 2),
       summary TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query("ALTER TABLE user_project_progress ADD COLUMN IF NOT EXISTS deadline_date DATE");
+  await pool.query("ALTER TABLE user_project_progress ADD COLUMN IF NOT EXISTS budget_total NUMERIC(12, 2)");
+  await pool.query("ALTER TABLE user_project_progress ADD COLUMN IF NOT EXISTS budget_used NUMERIC(12, 2)");
 
   console.log("Using PostgreSQL storage for inquiries.");
 }
@@ -1017,6 +1024,9 @@ async function ensureStarterProject(userId) {
       project_name: "Initial Discovery",
       status: "Planning",
       percent_complete: 15,
+      deadline_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 56).toISOString().slice(0, 10),
+      budget_total: 12000,
+      budget_used: 1800,
       summary: "Requirements collected and project timeline drafted.",
       updated_at: nowIso()
     });
@@ -1032,15 +1042,28 @@ async function ensureStarterProject(userId) {
 
   await pool.query(
     `
-      INSERT INTO user_project_progress (user_id, project_name, status, percent_complete, summary, updated_at)
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      INSERT INTO user_project_progress (
+        user_id,
+        project_name,
+        status,
+        percent_complete,
+        deadline_date,
+        budget_total,
+        budget_used,
+        summary,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
     `,
     [
       userId,
       "Initial Discovery",
       "Planning",
       15,
-      "Requirements collected and project timeline drafted."
+      "Requirements collected and project timeline drafted.",
+      new Date(Date.now() + 1000 * 60 * 60 * 24 * 56).toISOString().slice(0, 10),
+      12000,
+      1800
     ]
   );
 }
@@ -1056,6 +1079,7 @@ async function listUserProjects(userId) {
   const result = await pool.query(
     `
       SELECT id, user_id, project_name, status, percent_complete, summary, updated_at
+      , deadline_date, budget_total, budget_used
       FROM user_project_progress
       WHERE user_id = $1
       ORDER BY updated_at DESC, id DESC
@@ -1066,11 +1090,14 @@ async function listUserProjects(userId) {
   return result.rows;
 }
 
-async function upsertUserProjectProgress({ userId, projectName, status, percentComplete, summary }) {
+async function upsertUserProjectProgress({ userId, projectName, status, percentComplete, summary, deadlineDate, budgetTotal, budgetUsed }) {
   const safePercent = Math.max(0, Math.min(100, Number(percentComplete || 0)));
   const nextStatus = String(status || "Planning").trim() || "Planning";
   const nextSummary = String(summary || "").trim() || "Progress updated.";
   const nextProjectName = String(projectName || "").trim() || "Project";
+  const nextDeadlineDate = String(deadlineDate || "").trim() || null;
+  const safeBudgetTotal = Number.isFinite(Number(budgetTotal)) ? Math.max(0, Number(budgetTotal)) : 0;
+  const safeBudgetUsed = Number.isFinite(Number(budgetUsed)) ? Math.max(0, Number(budgetUsed)) : 0;
 
   if (!usePostgres) {
     const items = readJsonArray(userProgressPath);
@@ -1084,6 +1111,9 @@ async function upsertUserProjectProgress({ userId, projectName, status, percentC
         project_name: nextProjectName,
         status: nextStatus,
         percent_complete: safePercent,
+        deadline_date: nextDeadlineDate,
+        budget_total: safeBudgetTotal,
+        budget_used: safeBudgetUsed,
         summary: nextSummary,
         updated_at: nowIso()
       };
@@ -1096,6 +1126,9 @@ async function upsertUserProjectProgress({ userId, projectName, status, percentC
       ...items[existingIndex],
       status: nextStatus,
       percent_complete: safePercent,
+      deadline_date: nextDeadlineDate,
+      budget_total: safeBudgetTotal,
+      budget_used: safeBudgetUsed,
       summary: nextSummary,
       updated_at: nowIso()
     };
@@ -1117,11 +1150,21 @@ async function upsertUserProjectProgress({ userId, projectName, status, percentC
   if (!existing.rows[0]) {
     const insertResult = await pool.query(
       `
-        INSERT INTO user_project_progress (user_id, project_name, status, percent_complete, summary, updated_at)
-        VALUES ($1, $2, $3, $4, $5, NOW())
-        RETURNING id, user_id, project_name, status, percent_complete, summary, updated_at
+        INSERT INTO user_project_progress (
+          user_id,
+          project_name,
+          status,
+          percent_complete,
+          deadline_date,
+          budget_total,
+          budget_used,
+          summary,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        RETURNING id, user_id, project_name, status, percent_complete, deadline_date, budget_total, budget_used, summary, updated_at
       `,
-      [userId, nextProjectName, nextStatus, safePercent, nextSummary]
+      [userId, nextProjectName, nextStatus, safePercent, nextDeadlineDate, safeBudgetTotal, safeBudgetUsed, nextSummary]
     );
 
     return insertResult.rows[0];
@@ -1130,11 +1173,11 @@ async function upsertUserProjectProgress({ userId, projectName, status, percentC
   const updateResult = await pool.query(
     `
       UPDATE user_project_progress
-      SET status = $1, percent_complete = $2, summary = $3, updated_at = NOW()
-      WHERE id = $4
-      RETURNING id, user_id, project_name, status, percent_complete, summary, updated_at
+      SET status = $1, percent_complete = $2, deadline_date = $3, budget_total = $4, budget_used = $5, summary = $6, updated_at = NOW()
+      WHERE id = $7
+      RETURNING id, user_id, project_name, status, percent_complete, deadline_date, budget_total, budget_used, summary, updated_at
     `,
-    [nextStatus, safePercent, nextSummary, existing.rows[0].id]
+    [nextStatus, safePercent, nextDeadlineDate, safeBudgetTotal, safeBudgetUsed, nextSummary, existing.rows[0].id]
   );
 
   return updateResult.rows[0];
@@ -1379,6 +1422,9 @@ app.post("/api/admin/user-progress", requireAdmin, async (req, res) => {
   const status = String(req.body.status || "").trim();
   const summary = String(req.body.summary || "").trim();
   const percentComplete = Number(req.body.percentComplete);
+  const deadlineDate = String(req.body.deadlineDate || "").trim();
+  const budgetTotal = Number(req.body.budgetTotal);
+  const budgetUsed = Number(req.body.budgetUsed);
 
   if (!identity || !projectName || !summary || !Number.isFinite(percentComplete)) {
     return res.status(400).json({
@@ -1398,7 +1444,10 @@ app.post("/api/admin/user-progress", requireAdmin, async (req, res) => {
       projectName,
       status,
       percentComplete,
-      summary
+      summary,
+      deadlineDate,
+      budgetTotal,
+      budgetUsed
     });
 
     await addAuditEntry({

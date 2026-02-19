@@ -79,9 +79,20 @@ As long as the service still uses the same database, your inquiry history stays 
 - User account registration and login
 - JWT-based authenticated sessions for portal APIs
 - Project progress dashboard for logged-in users
+- Dashboard stats/graphs: completion, budget usage, and weeks-to-deadline
 - Left-side slide-out menu with hamburger button and logout action
 - Admin progress update API: `POST /api/admin/user-progress` (requires admin key)
 - Admin account reset API: `POST /api/admin/users/reset` (requires admin key; clears all client accounts/progress)
+
+`POST /api/admin/user-progress` accepts:
+- `identity` (username/email)
+- `projectName`
+- `status`
+- `percentComplete`
+- `deadlineDate` (`YYYY-MM-DD`)
+- `budgetTotal`
+- `budgetUsed`
+- `summary`
 
 ## Notification and alert environment variables (optional)
 

@@ -67,6 +67,15 @@
             <label for="progress-percent">Percent Complete</label>
             <input id="progress-percent" type="number" min="0" max="100" step="1" value="0" required />
 
+            <label for="progress-deadline">Deadline Date</label>
+            <input id="progress-deadline" type="date" required />
+
+            <label for="progress-budget-total">Budget Total</label>
+            <input id="progress-budget-total" type="number" min="0" step="0.01" value="0" required />
+
+            <label for="progress-budget-used">Budget Used</label>
+            <input id="progress-budget-used" type="number" min="0" step="0.01" value="0" required />
+
             <label for="progress-summary">Progress Summary</label>
             <textarea id="progress-summary" rows="3" placeholder="What has been completed since the last update?" required></textarea>
 
@@ -80,7 +89,7 @@
             <pre id="progress-api-snippet" class="api-snippet">curl -X POST "https://your-service-name.onrender.com/api/admin/user-progress" \
   -H "Content-Type: application/json" \
   -H "x-admin-key: YOUR_ADMIN_KEY" \
-  -d '{"identity":"client@example.com","projectName":"Project Alpha","status":"In Development","percentComplete":45,"summary":"Core features delivered and in internal QA."}'</pre>
+  -d '{"identity":"client@example.com","projectName":"Project Alpha","status":"In Development","percentComplete":45,"deadlineDate":"2026-04-30","budgetTotal":25000,"budgetUsed":9800,"summary":"Core features delivered and in internal QA."}'</pre>
             <button class="btn btn-submit" type="button" id="copy-progress-api">Copy cURL</button>
           </div>
 
@@ -193,6 +202,9 @@
       const progressProject = document.getElementById("progress-project");
       const progressStatus = document.getElementById("progress-status");
       const progressPercent = document.getElementById("progress-percent");
+      const progressDeadline = document.getElementById("progress-deadline");
+      const progressBudgetTotal = document.getElementById("progress-budget-total");
+      const progressBudgetUsed = document.getElementById("progress-budget-used");
       const progressSummary = document.getElementById("progress-summary");
       const copyProgressApiButton = document.getElementById("copy-progress-api");
       const progressApiSnippet = document.getElementById("progress-api-snippet");
@@ -490,9 +502,12 @@
           const projectName = progressProject.value.trim();
           const projectStatus = progressStatus.value.trim();
           const percentComplete = Number(progressPercent.value);
+          const deadlineDate = progressDeadline.value;
+          const budgetTotal = Number(progressBudgetTotal.value);
+          const budgetUsed = Number(progressBudgetUsed.value);
           const summary = progressSummary.value.trim();
 
-          if (!identity || !projectName || !projectStatus || !summary || !Number.isFinite(percentComplete)) {
+          if (!identity || !projectName || !projectStatus || !summary || !deadlineDate || !Number.isFinite(percentComplete) || !Number.isFinite(budgetTotal) || !Number.isFinite(budgetUsed)) {
             setStatus("All progress update fields are required.", "form-status-error");
             return;
           }
@@ -506,6 +521,9 @@
                 projectName,
                 status: projectStatus,
                 percentComplete,
+                deadlineDate,
+                budgetTotal,
+                budgetUsed,
                 summary
               })
             });
@@ -513,6 +531,8 @@
             setStatus("Client project progress updated.", "form-status-success");
             progressForm.reset();
             progressPercent.value = "0";
+            progressBudgetTotal.value = "0";
+            progressBudgetUsed.value = "0";
             await loadAudit();
           } catch (error) {
             setStatus(error.message || "Unable to update client progress.", "form-status-error");
