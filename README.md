@@ -132,6 +132,18 @@ If you see `ETIMEDOUT` from Nodemailer on Render, your SMTP host/port is unreach
 ## Accessibility (WCAG AA) verification checklist
 
 The UI is designed with AA-oriented contrast tokens for both light and dark themes.
+Accessibility tools are available in the slide-out side menu under the **Accessibility** section:
+
+- Ultra contrast toggle
+- Text size scaling
+- Image magnifier scaling
+- Built-in text-to-speech tools (read page, read selection, pause/resume, stop)
+
+Keyboard shortcuts:
+- `Alt+Shift+A` open side menu and focus Accessibility section
+- `Alt+Shift+R` read current page content aloud
+- `Alt+Shift+S` stop text-to-speech
+
 Use this quick manual checklist after deploy:
 
 1. **Theme parity**

@@ -1,4 +1,5 @@
 :root {
+  --user-image-scale: 1;
   --bg: #f4f8ff;
   --bg-grad-start: #f7fbff;
   --bg-grad-end: #eaf2ff;
@@ -40,6 +41,28 @@
   --success: #9ee7b3;
   --error: #fecaca;
   --loading: #bfdbfe;
+}
+
+:root[data-contrast="ultra"] {
+  --bg: #ffffff;
+  --bg-grad-start: #ffffff;
+  --bg-grad-end: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --text: #000000;
+  --muted: #000000;
+  --link: #0000ee;
+  --link-hover: #0000aa;
+  --blue: #000000;
+  --blue-soft: #000000;
+  --blue-lighter: #000000;
+  --border: #000000;
+  --focus: rgba(0, 0, 0, 0.55);
+  --input-bg: #ffffff;
+  --header-bg: #ffffff;
+  --success: #003d00;
+  --error: #7a0000;
+  --loading: #000000;
 }
 
 * {
@@ -625,6 +648,99 @@ body.menu-open {
 
 .side-menu-logout {
   width: 100%;
+}
+
+.a11y-image-scale img,
+.a11y-image-scale svg,
+.a11y-image-scale video,
+.a11y-image-scale canvas {
+  transform: scale(var(--user-image-scale));
+  transform-origin: center center;
+}
+
+.side-menu-accessibility {
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.side-menu-accessibility-summary {
+  cursor: pointer;
+  padding: 0.6rem 0.7rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.side-menu-accessibility-body {
+  padding: 0 0.7rem 0.7rem;
+}
+
+.a11y-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+.a11y-label {
+  display: block;
+  margin: 0.45rem 0 0.2rem;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+.a11y-range {
+  width: 100%;
+}
+
+.a11y-value {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.a11y-tts-wrap {
+  margin-top: 0.4rem;
+}
+
+.a11y-tts-wrap h5 {
+  margin: 0.2rem 0 0.4rem;
+}
+
+.a11y-tts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.a11y-status {
+  margin: 0.55rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  min-height: 1.1rem;
+}
+
+.a11y-shortcuts {
+  margin: 0.55rem 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.a11y-shortcut-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.48rem;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
 }
 
 .account-grid {
