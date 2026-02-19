@@ -1417,6 +1417,27 @@ app.post("/api/admin/user-progress", requireAdmin, async (req, res) => {
   }
 });
 
+app.post("/api/admin/users/reset", requireAdmin, async (_req, res) => {
+  try {
+    if (!usePostgres) {
+      writeJsonArray(usersPath, []);
+      writeJsonArray(userProgressPath, []);
+    } else {
+      await pool.query("TRUNCATE TABLE user_project_progress, users RESTART IDENTITY CASCADE");
+    }
+
+    await addAuditEntry({
+      action: "users-reset",
+      changedFields: { reset_all_accounts: true }
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Failed to reset user accounts", error);
+    return res.status(500).json({ ok: false, message: "Unable to reset accounts right now." });
+  }
+});
+
 app.post("/api/inquiries", contactLimiter, (req, res, next) => {
   upload.single("attachment")(req, res, (err) => {
     if (err) {

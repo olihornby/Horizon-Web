@@ -81,6 +81,7 @@ As long as the service still uses the same database, your inquiry history stays 
 - Project progress dashboard for logged-in users
 - Left-side slide-out menu with hamburger button and logout action
 - Admin progress update API: `POST /api/admin/user-progress` (requires admin key)
+- Admin account reset API: `POST /api/admin/users/reset` (requires admin key; clears all client accounts/progress)
 
 ## Notification and alert environment variables (optional)
 

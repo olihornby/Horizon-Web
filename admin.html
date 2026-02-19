@@ -83,6 +83,11 @@
   -d '{"identity":"client@example.com","projectName":"Project Alpha","status":"In Development","percentComplete":45,"summary":"Core features delivered and in internal QA."}'</pre>
             <button class="btn btn-submit" type="button" id="copy-progress-api">Copy cURL</button>
           </div>
+
+          <div class="api-snippet-wrap">
+            <p class="api-snippet-title">Danger Zone</p>
+            <button class="btn btn-submit" type="button" id="reset-accounts-btn">Reset All Client Accounts</button>
+          </div>
         </section>
 
         <form id="filter-form" class="admin-filters" autocomplete="off">
@@ -191,6 +196,7 @@
       const progressSummary = document.getElementById("progress-summary");
       const copyProgressApiButton = document.getElementById("copy-progress-api");
       const progressApiSnippet = document.getElementById("progress-api-snippet");
+      const resetAccountsButton = document.getElementById("reset-accounts-btn");
 
       const prevPageButton = document.getElementById("prev-page");
       const nextPageButton = document.getElementById("next-page");
@@ -523,6 +529,30 @@
             setStatus("Progress API cURL copied.", "form-status-success");
           } catch (_error) {
             setStatus("Unable to copy automatically. Please copy the snippet manually.", "form-status-error");
+          }
+        });
+      }
+
+      if (resetAccountsButton) {
+        resetAccountsButton.addEventListener("click", async function () {
+          if (!state.key) {
+            setStatus("Load inquiries first with your admin key.", "form-status-error");
+            return;
+          }
+
+          const confirmed = window.confirm("This will remove ALL client accounts and project progress. Continue?");
+          if (!confirmed) {
+            return;
+          }
+
+          try {
+            await fetchJson("/api/admin/users/reset", {
+              method: "POST"
+            });
+
+            setStatus("All client accounts and progress records were reset.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to reset accounts.", "form-status-error");
           }
         });
       }
