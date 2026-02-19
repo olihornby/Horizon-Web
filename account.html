@@ -237,14 +237,9 @@
       }
 
       function setLoggedInState(isLoggedIn) {
+        progressSection.hidden = !isLoggedIn;
         authSection.hidden = isLoggedIn;
         logoutButton.hidden = !isLoggedIn;
-
-        if (isLoggedIn) {
-          progressSection.parentElement.insertBefore(progressSection, authSection);
-        } else {
-          progressSection.parentElement.appendChild(authSection);
-        }
       }
 
       async function loadMeAndProjects() {
