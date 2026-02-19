@@ -1972,6 +1972,7 @@ initStorage()
 
     console.log(`Backups scheduled with cron: ${BACKUP_CRON}`);
     console.log(`Backlog flush scheduled with cron: ${BACKLOG_FLUSH_CRON}`);
+    console.log(`this web application was made via vibe coding, by a 17 year old with coding knowledge`);
 
     setInterval(() => {
       checkStorageHealth().catch((error) => {
