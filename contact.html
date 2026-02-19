@@ -65,6 +65,14 @@
           <label for="details">Project or Support Details</label>
           <textarea id="details" name="details" rows="5" required></textarea>
 
+          <div class="honeypot-wrap" aria-hidden="true">
+            <label for="website">Website</label>
+            <input id="website" name="website" type="text" tabindex="-1" autocomplete="off" />
+          </div>
+
+          <label for="attachment">Attachment (optional)</label>
+          <input id="attachment" name="attachment" type="file" accept=".pdf,.png,.jpg,.jpeg,.txt,.doc,.docx" />
+
           <p class="form-status" id="form-status" aria-live="polite"></p>
           <button class="btn btn-submit" type="submit">Send Request</button>
         </form>
@@ -93,11 +101,6 @@
         const submitButton = form.querySelector("button[type='submit']");
         const ajaxAction = form.getAttribute("data-ajax-action");
         const formData = new FormData(form);
-        const payload = new URLSearchParams();
-
-        for (const [key, value] of formData.entries()) {
-          payload.append(key, value);
-        }
 
         statusElement.textContent = "Sending your request...";
         statusElement.className = "form-status form-status-loading";
@@ -109,15 +112,18 @@
         try {
           const response = await fetch(ajaxAction, {
             method: "POST",
-            body: payload,
+            body: formData,
             headers: {
-              Accept: "application/json",
-              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+              Accept: "application/json"
             }
           });
 
-          if (!response.ok) {
-            throw new Error("Request failed");
+          const payload = await response.json().catch(function () {
+            return { ok: false, message: "Request failed" };
+          });
+
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.message || "Request failed");
           }
 
           statusElement.textContent = "Thanks! Your request was sent successfully. We will reply within one business day.";
@@ -127,7 +133,7 @@
             window.location.href = "thanks.html";
           }, 1000);
         } catch (error) {
-          statusElement.innerHTML = "Your request could not be sent right now. Please try again or email <a href=\"mailto:Inquiries@Horizon-Industries.com\">Inquiries@Horizon-Industries.com</a> or <a href=\"mailto:oli.enbie307@gmail.com\">oli.enbie307@gmail.com</a>.";
+          statusElement.innerHTML = (error && error.message ? error.message + " " : "") + "Please try again or email <a href=\"mailto:Inquiries@Horizon-Industries.com\">Inquiries@Horizon-Industries.com</a> or <a href=\"mailto:oli.enbie307@gmail.com\">oli.enbie307@gmail.com</a>.";
           statusElement.className = "form-status form-status-error";
         } finally {
           if (submitButton) {

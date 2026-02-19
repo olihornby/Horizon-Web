@@ -38,12 +38,15 @@ Use these URLs after deploy:
 - Contact form: `https://your-service-name.onrender.com/contact.html`
 - Admin viewer: `https://your-service-name.onrender.com/admin.html`
 - CSV export: `https://your-service-name.onrender.com/api/inquiries.csv?key=YOUR_ADMIN_KEY`
+- Monitoring details: `https://your-service-name.onrender.com/health/details`
 
 ## Important notes
 
-- The contact form now submits in a backend-compatible format and is saved by `POST /api/inquiries`.
+- The contact form supports optional file attachments (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.txt`, `.doc`, `.docx`, max 5MB) and is saved by `POST /api/inquiries`.
+- Contact form includes anti-spam protections (IP rate limiting + honeypot field).
 - In production (when `DATABASE_URL` exists), inquiries are stored in PostgreSQL and persist through code pushes/redeploys.
 - In local development (without `DATABASE_URL`), inquiries are stored in `inquiries.json`.
+- Daily backups are written to `/backups` as JSON + CSV snapshots.
 
 ## Pushing updates without losing inquiries
 
@@ -59,3 +62,27 @@ As long as the service still uses the same database, your inquiry history stays 
 - You will be prompted for your admin key first (if it is not already entered).
 - In supported browsers, a save dialog appears so you can choose where to save the file.
 - In browsers without file-picker support, the CSV downloads using the browser's default download behavior.
+
+## Admin features
+
+- Status workflow: `new`, `in-progress`, `resolved`
+- Search and filters: text query, email, request type, status, date range
+- Edit inquiry details
+- Delete inquiry with confirmation
+- Attachment download links in the admin table
+- Analytics summary cards and activity audit feed
+
+## Notification and alert environment variables (optional)
+
+Set these in your deployment platform to enable email notifications and monitoring alerts:
+
+- `SMTP_HOST`
+- `SMTP_PORT` (default `587`)
+- `SMTP_SECURE` (`true` or `false`)
+- `SMTP_USER`
+- `SMTP_PASS`
+- `SMTP_FROM` (optional, defaults to `SMTP_USER`)
+- `NOTIFY_EMAIL` (recipient for new inquiry notifications)
+- `ALERT_EMAIL` (recipient for health-alert emails)
+
+If SMTP values are not provided, the app still works but email notifications/alerts are disabled.

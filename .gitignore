@@ -1,3 +1,6 @@
 node_modules/
 .env
 inquiries.json
+audit-log.json
+backups/
+uploads/

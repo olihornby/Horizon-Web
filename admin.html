@@ -14,7 +14,7 @@
         <a href="about.html">About</a>
         <a href="services.html">Services</a>
         <a href="contact.html">Contact</a>
-        <a href="admin.html">Admin</a>
+        <a href="admin.html" data-admin-link hidden>Admin</a>
       </nav>
     </div>
   </header>
@@ -23,7 +23,7 @@
     <section class="section">
       <div class="container">
         <h3>Inquiry Admin</h3>
-        <p>Enter your admin key to load support and consultation submissions.</p>
+        <p>Use your admin key to view, filter, edit, export, and manage submissions.</p>
 
         <form id="admin-form" class="admin-auth" autocomplete="off">
           <label for="admin-key">Admin Key</label>
@@ -34,6 +34,53 @@
 
         <p id="admin-status" class="form-status" aria-live="polite"></p>
 
+        <section class="admin-cards" id="analytics-cards" aria-live="polite">
+          <article class="card"><h4>Total</h4><p id="metric-total">-</p></article>
+          <article class="card"><h4>New</h4><p id="metric-new">-</p></article>
+          <article class="card"><h4>In Progress</h4><p id="metric-progress">-</p></article>
+          <article class="card"><h4>Resolved</h4><p id="metric-resolved">-</p></article>
+        </section>
+
+        <section class="card admin-panel" id="monitor-panel">
+          <h4>Monitoring</h4>
+          <p id="monitor-text">No monitoring data yet.</p>
+        </section>
+
+        <form id="filter-form" class="admin-filters" autocomplete="off">
+          <label for="filter-q">Search</label>
+          <input id="filter-q" type="text" placeholder="name, company, email, details" />
+
+          <label for="filter-email">Email</label>
+          <input id="filter-email" type="text" placeholder="example@domain.com" />
+
+          <label for="filter-type">Request Type</label>
+          <select id="filter-type">
+            <option value="">All</option>
+            <option value="support">Support</option>
+            <option value="consultation">Consultation</option>
+            <option value="project">Project Inquiry</option>
+          </select>
+
+          <label for="filter-status">Status</label>
+          <select id="filter-status">
+            <option value="">All</option>
+            <option value="new">New</option>
+            <option value="in-progress">In Progress</option>
+            <option value="resolved">Resolved</option>
+          </select>
+
+          <label for="filter-from">From</label>
+          <input id="filter-from" type="date" />
+
+          <label for="filter-to">To</label>
+          <input id="filter-to" type="date" />
+
+          <div class="admin-filter-actions">
+            <button class="btn btn-submit" type="submit">Apply Filters</button>
+            <button class="btn btn-submit" id="reset-filters" type="button">Reset</button>
+          </div>
+        </form>
+
         <div class="table-wrap">
           <table class="inquiry-table">
             <thead>
@@ -43,16 +90,32 @@
                 <th>Company</th>
                 <th>Email</th>
                 <th>Type</th>
+                <th>Status</th>
+                <th>Attachment</th>
                 <th>Details</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="inquiry-body">
               <tr>
-                <td colspan="6">No data loaded yet.</td>
+                <td colspan="9">No data loaded yet.</td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <div class="pagination" id="pagination">
+          <button class="btn btn-submit" type="button" id="prev-page">Previous</button>
+          <span id="page-info">Page 1</span>
+          <button class="btn btn-submit" type="button" id="next-page">Next</button>
+        </div>
+
+        <section class="card admin-panel">
+          <h4>Recent Audit Activity</h4>
+          <ul id="audit-list" class="audit-list">
+            <li>No audit activity loaded.</li>
+          </ul>
+        </section>
       </div>
     </section>
   </main>
@@ -70,6 +133,76 @@
       const status = document.getElementById("admin-status");
       const tbody = document.getElementById("inquiry-body");
       const exportButton = document.getElementById("export-csv");
+      const homeLink = document.querySelector(".logo-link");
+      const adminNavLink = document.querySelector("[data-admin-link]");
+
+      const filterForm = document.getElementById("filter-form");
+      const filterQ = document.getElementById("filter-q");
+      const filterEmail = document.getElementById("filter-email");
+      const filterType = document.getElementById("filter-type");
+      const filterStatus = document.getElementById("filter-status");
+      const filterFrom = document.getElementById("filter-from");
+      const filterTo = document.getElementById("filter-to");
+      const resetFiltersButton = document.getElementById("reset-filters");
+
+      const prevPageButton = document.getElementById("prev-page");
+      const nextPageButton = document.getElementById("next-page");
+      const pageInfo = document.getElementById("page-info");
+      const auditList = document.getElementById("audit-list");
+
+      const metricTotal = document.getElementById("metric-total");
+      const metricNew = document.getElementById("metric-new");
+      const metricProgress = document.getElementById("metric-progress");
+      const metricResolved = document.getElementById("metric-resolved");
+      const monitorText = document.getElementById("monitor-text");
+
+      const state = {
+        key: "",
+        page: 1,
+        pageSize: 25,
+        totalPages: 1,
+        filters: {
+          q: "",
+          email: "",
+          requestType: "",
+          status: "",
+          dateFrom: "",
+          dateTo: ""
+        }
+      };
+
+      const countKey = "horizonHomeTapCount";
+      const visibleKey = "horizonAdminMenuVisible";
+
+      function showAdminNavLink() {
+        if (adminNavLink) {
+          adminNavLink.hidden = false;
+        }
+      }
+
+      if (sessionStorage.getItem(visibleKey) === "1") {
+        showAdminNavLink();
+      }
+
+      if (homeLink) {
+        homeLink.addEventListener("click", function (event) {
+          if (sessionStorage.getItem(visibleKey) === "1") {
+            return;
+          }
+
+          const currentCount = Number(sessionStorage.getItem(countKey) || "0") + 1;
+
+          if (currentCount >= 5) {
+            event.preventDefault();
+            sessionStorage.setItem(countKey, "0");
+            sessionStorage.setItem(visibleKey, "1");
+            showAdminNavLink();
+            return;
+          }
+
+          sessionStorage.setItem(countKey, String(currentCount));
+        });
+      }
 
       function escapeHtml(value) {
         return String(value)
@@ -80,25 +213,159 @@
           .replace(/'/g, "&#039;");
       }
 
+      function setStatus(text, type) {
+        status.textContent = text;
+        status.className = "form-status " + (type || "");
+      }
+
+      function buildQuery() {
+        const params = new URLSearchParams();
+        params.set("page", String(state.page));
+        params.set("pageSize", String(state.pageSize));
+
+        Object.keys(state.filters).forEach(function (key) {
+          const value = state.filters[key];
+          if (value) {
+            params.set(key, value);
+          }
+        });
+
+        return params.toString();
+      }
+
+      function statusOptions(selected) {
+        const statuses = ["new", "in-progress", "resolved"];
+
+        return statuses
+          .map(function (value) {
+            const label = value === "in-progress" ? "In Progress" : value.charAt(0).toUpperCase() + value.slice(1);
+            const selectedText = selected === value ? " selected" : "";
+            return "<option value='" + value + "'" + selectedText + ">" + label + "</option>";
+          })
+          .join("");
+      }
+
       function renderRows(items) {
         if (!items.length) {
-          tbody.innerHTML = "<tr><td colspan='6'>No inquiries yet.</td></tr>";
+          tbody.innerHTML = "<tr><td colspan='9'>No inquiries matched your filters.</td></tr>";
           return;
         }
 
         tbody.innerHTML = items
           .map(function (row) {
             const date = new Date(row.created_at).toLocaleString();
-            return "<tr>" +
+            const attachment = row.attachment_original_name
+              ? "<a href='/api/inquiries/" + row.id + "/attachment?key=" + encodeURIComponent(state.key) + "'>" + escapeHtml(row.attachment_original_name) + "</a>"
+              : "-";
+
+            return "<tr data-id='" + row.id + "'>" +
               "<td>" + escapeHtml(date) + "</td>" +
               "<td>" + escapeHtml(row.full_name) + "</td>" +
               "<td>" + escapeHtml(row.company || "-") + "</td>" +
               "<td>" + escapeHtml(row.email) + "</td>" +
               "<td>" + escapeHtml(row.request_type) + "</td>" +
+              "<td><select class='status-select' data-id='" + row.id + "'>" + statusOptions(row.status || "new") + "</select></td>" +
+              "<td>" + attachment + "</td>" +
               "<td>" + escapeHtml(row.details) + "</td>" +
+              "<td class='row-actions'>" +
+                "<button class='btn btn-submit btn-mini' type='button' data-action='edit' data-id='" + row.id + "'>Edit</button>" +
+                "<button class='btn btn-submit btn-mini' type='button' data-action='delete' data-id='" + row.id + "'>Delete</button>" +
+              "</td>" +
             "</tr>";
           })
           .join("");
+      }
+
+      function updatePagination(pagination) {
+        state.totalPages = pagination.totalPages || 1;
+        pageInfo.textContent = "Page " + (pagination.page || 1) + " of " + state.totalPages + " (" + (pagination.total || 0) + " total)";
+        prevPageButton.disabled = state.page <= 1;
+        nextPageButton.disabled = state.page >= state.totalPages;
+      }
+
+      async function fetchJson(url, options) {
+        const finalOptions = options || {};
+        finalOptions.headers = Object.assign({}, finalOptions.headers || {}, {
+          "x-admin-key": state.key
+        });
+
+        const response = await fetch(url, finalOptions);
+        const payload = await response.json().catch(function () {
+          return { ok: false, message: "Unexpected response" };
+        });
+
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.message || "Request failed");
+        }
+
+        return payload;
+      }
+
+      async function loadInquiries() {
+        setStatus("Loading inquiries...", "form-status-loading");
+
+        try {
+          const payload = await fetchJson("/api/inquiries?" + buildQuery());
+          renderRows(payload.inquiries || []);
+          updatePagination(payload.pagination || { page: 1, totalPages: 1, total: 0 });
+          setStatus("Inquiries loaded.", "form-status-success");
+        } catch (error) {
+          setStatus(error.message || "Unable to load inquiries.", "form-status-error");
+        }
+      }
+
+      async function loadAnalytics() {
+        try {
+          const payload = await fetchJson("/api/inquiries/analytics");
+          const analytics = payload.analytics || {};
+          metricTotal.textContent = String(analytics.total || 0);
+          metricNew.textContent = String((analytics.byStatus && analytics.byStatus.new) || 0);
+          metricProgress.textContent = String((analytics.byStatus && analytics.byStatus["in-progress"]) || 0);
+          metricResolved.textContent = String((analytics.byStatus && analytics.byStatus.resolved) || 0);
+        } catch (_error) {
+          metricTotal.textContent = "-";
+          metricNew.textContent = "-";
+          metricProgress.textContent = "-";
+          metricResolved.textContent = "-";
+        }
+      }
+
+      async function loadAudit() {
+        try {
+          const payload = await fetchJson("/api/inquiries/audit?limit=10");
+          const items = payload.audit || [];
+
+          if (!items.length) {
+            auditList.innerHTML = "<li>No audit activity.</li>";
+            return;
+          }
+
+          auditList.innerHTML = items
+            .map(function (item) {
+              const at = new Date(item.created_at).toLocaleString();
+              const idText = item.inquiry_id ? "#" + item.inquiry_id : "system";
+              return "<li><strong>" + escapeHtml(item.action) + "</strong> on " + escapeHtml(idText) + " at " + escapeHtml(at) + "</li>";
+            })
+            .join("");
+        } catch (_error) {
+          auditList.innerHTML = "<li>Unable to load audit activity.</li>";
+        }
+      }
+
+      async function loadMonitoring() {
+        try {
+          const response = await fetch("/health/details", { headers: { Accept: "application/json" } });
+          const payload = await response.json();
+          const stateText = payload.storage_healthy ? "healthy" : "unhealthy";
+          monitorText.textContent = "Storage is " + stateText + ". Last check: " + (payload.last_storage_check_at || "n/a") + ". Last backup: " + (payload.last_backup_at || "n/a") + ".";
+        } catch (_error) {
+          monitorText.textContent = "Unable to load monitoring status.";
+        }
+      }
+
+      async function refreshAll() {
+        await loadInquiries();
+        await Promise.all([loadAnalytics(), loadAudit(), loadMonitoring()]);
       }
 
       form.addEventListener("submit", async function (event) {
@@ -106,28 +373,179 @@
 
         const key = keyInput.value.trim();
         if (!key) {
-          status.textContent = "Please provide an admin key.";
-          status.className = "form-status form-status-error";
+          setStatus("Please provide an admin key.", "form-status-error");
           return;
         }
 
-        status.textContent = "Loading inquiries...";
-        status.className = "form-status form-status-loading";
+        state.key = key;
+        state.page = 1;
+        await refreshAll();
+      });
+
+      filterForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        if (!state.key) {
+          setStatus("Load inquiries first with your admin key.", "form-status-error");
+          return;
+        }
+
+        state.filters.q = filterQ.value.trim();
+        state.filters.email = filterEmail.value.trim();
+        state.filters.requestType = filterType.value;
+        state.filters.status = filterStatus.value;
+        state.filters.dateFrom = filterFrom.value;
+        state.filters.dateTo = filterTo.value;
+        state.page = 1;
+
+        await loadInquiries();
+      });
+
+      resetFiltersButton.addEventListener("click", async function () {
+        filterQ.value = "";
+        filterEmail.value = "";
+        filterType.value = "";
+        filterStatus.value = "";
+        filterFrom.value = "";
+        filterTo.value = "";
+
+        state.filters = {
+          q: "",
+          email: "",
+          requestType: "",
+          status: "",
+          dateFrom: "",
+          dateTo: ""
+        };
+        state.page = 1;
+
+        if (state.key) {
+          await loadInquiries();
+        }
+      });
+
+      prevPageButton.addEventListener("click", async function () {
+        if (state.page <= 1 || !state.key) {
+          return;
+        }
+
+        state.page -= 1;
+        await loadInquiries();
+      });
+
+      nextPageButton.addEventListener("click", async function () {
+        if (!state.key || state.page >= state.totalPages) {
+          return;
+        }
+
+        state.page += 1;
+        await loadInquiries();
+      });
+
+      tbody.addEventListener("change", async function (event) {
+        if (!event.target.classList.contains("status-select")) {
+          return;
+        }
+
+        const id = event.target.getAttribute("data-id");
+        const nextStatus = event.target.value;
 
         try {
-          const response = await fetch("/api/inquiries?key=" + encodeURIComponent(key));
-          const payload = await response.json();
+          await fetchJson("/api/inquiries/" + encodeURIComponent(id) + "/status", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: nextStatus })
+          });
 
-          if (!response.ok || !payload.ok) {
-            throw new Error("Unauthorized or request failed");
+          setStatus("Status updated.", "form-status-success");
+          await Promise.all([loadAnalytics(), loadAudit()]);
+        } catch (error) {
+          setStatus(error.message || "Unable to update status.", "form-status-error");
+        }
+      });
+
+      tbody.addEventListener("click", async function (event) {
+        const button = event.target.closest("button[data-action]");
+        if (!button) {
+          return;
+        }
+
+        const action = button.getAttribute("data-action");
+        const id = button.getAttribute("data-id");
+        const row = button.closest("tr");
+
+        if (action === "delete") {
+          const confirmed = window.confirm("Delete inquiry #" + id + "?");
+          if (!confirmed) {
+            return;
           }
 
-          renderRows(payload.inquiries || []);
-          status.textContent = "Inquiries loaded.";
-          status.className = "form-status form-status-success";
-        } catch (error) {
-          status.textContent = "Unable to load inquiries. Check your admin key and try again.";
-          status.className = "form-status form-status-error";
+          try {
+            await fetchJson("/api/inquiries/" + encodeURIComponent(id), {
+              method: "DELETE"
+            });
+            setStatus("Inquiry deleted.", "form-status-success");
+            await refreshAll();
+          } catch (error) {
+            setStatus(error.message || "Unable to delete inquiry.", "form-status-error");
+          }
+
+          return;
+        }
+
+        if (action === "edit") {
+          const cells = row.querySelectorAll("td");
+          const existingName = cells[1] ? cells[1].textContent.trim() : "";
+          const existingCompany = cells[2] ? cells[2].textContent.trim() : "";
+          const existingEmail = cells[3] ? cells[3].textContent.trim() : "";
+          const existingType = cells[4] ? cells[4].textContent.trim() : "";
+          const existingDetails = cells[7] ? cells[7].textContent.trim() : "";
+          const existingStatus = row.querySelector(".status-select") ? row.querySelector(".status-select").value : "new";
+
+          const fullName = window.prompt("Full name", existingName);
+          if (fullName === null) {
+            return;
+          }
+
+          const company = window.prompt("Company", existingCompany === "-" ? "" : existingCompany);
+          if (company === null) {
+            return;
+          }
+
+          const email = window.prompt("Email", existingEmail);
+          if (email === null) {
+            return;
+          }
+
+          const requestType = window.prompt("Request type (support/consultation/project)", existingType);
+          if (requestType === null) {
+            return;
+          }
+
+          const details = window.prompt("Details", existingDetails);
+          if (details === null) {
+            return;
+          }
+
+          try {
+            await fetchJson("/api/inquiries/" + encodeURIComponent(id), {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                fullName: fullName.trim(),
+                company: company.trim(),
+                email: email.trim(),
+                requestType: requestType.trim(),
+                details: details.trim(),
+                status: existingStatus
+              })
+            });
+
+            setStatus("Inquiry updated.", "form-status-success");
+            await refreshAll();
+          } catch (error) {
+            setStatus(error.message || "Unable to update inquiry.", "form-status-error");
+          }
         }
       });
 
@@ -145,14 +563,13 @@
           }
 
           if (!key) {
-            status.textContent = "Admin key is required before export.";
-            status.className = "form-status form-status-error";
+            setStatus("Admin key is required before export.", "form-status-error");
             return;
           }
 
+          state.key = key;
           exportButton.disabled = true;
-          status.textContent = "Preparing CSV export...";
-          status.className = "form-status form-status-loading";
+          setStatus("Preparing CSV export...", "form-status-loading");
 
           try {
             const response = await fetch("/api/inquiries.csv?key=" + encodeURIComponent(key), {
@@ -192,16 +609,16 @@
               URL.revokeObjectURL(tempUrl);
             }
 
-            status.textContent = "CSV export complete.";
-            status.className = "form-status form-status-success";
+            setStatus("CSV export complete.", "form-status-success");
           } catch (error) {
-            status.textContent = "Could not export CSV. Check your admin key and try again.";
-            status.className = "form-status form-status-error";
+            setStatus(error.message || "Could not export CSV.", "form-status-error");
           } finally {
             exportButton.disabled = false;
           }
         });
       }
+
+      loadMonitoring();
     })();
   </script>
 </body>
