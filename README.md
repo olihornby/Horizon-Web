@@ -46,7 +46,7 @@ Use these URLs after deploy:
 - Contact form includes anti-spam protections (IP rate limiting + honeypot field).
 - In production (when `DATABASE_URL` exists), inquiries are stored in PostgreSQL and persist through code pushes/redeploys.
 - In local development (without `DATABASE_URL`), inquiries are stored in `inquiries.json`.
-- Daily backups are written to `/backups` as JSON + CSV snapshots.
+- Automated backups run every 15 minutes (recommended default) and are written to `/backups` as JSON + CSV snapshots.
 
 ## Pushing updates without losing inquiries
 
@@ -84,6 +84,7 @@ Set these in your deployment platform to enable email notifications and monitori
 - `SMTP_FROM` (optional, defaults to `SMTP_USER`)
 - `NOTIFY_EMAIL` (recipient for new inquiry notifications)
 - `ALERT_EMAIL` (recipient for health-alert emails)
+- `BACKUP_CRON` (optional cron override for backup frequency; default is `*/15 * * * *`)
 
 If SMTP values are not provided, the app still works but email notifications/alerts are disabled.
 

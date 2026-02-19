@@ -11,6 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
+const BACKUP_CRON = process.env.BACKUP_CRON || "*/15 * * * *";
 const usePostgres = Boolean(DATABASE_URL);
 const startTime = Date.now();
 
@@ -1203,14 +1204,16 @@ initStorage()
       console.error("Initial backup failed", error);
     }
 
-    cron.schedule("0 2 * * *", async () => {
+    cron.schedule(BACKUP_CRON, async () => {
       try {
-        await runBackup("daily");
+        await runBackup("scheduled");
       } catch (error) {
         monitorState.lastBackupError = error.message;
         console.error("Scheduled backup failed", error);
       }
     });
+
+    console.log(`Backups scheduled with cron: ${BACKUP_CRON}`);
 
     setInterval(() => {
       checkStorageHealth().catch((error) => {
