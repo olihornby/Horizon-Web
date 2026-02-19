@@ -86,3 +86,28 @@ Set these in your deployment platform to enable email notifications and monitori
 - `ALERT_EMAIL` (recipient for health-alert emails)
 
 If SMTP values are not provided, the app still works but email notifications/alerts are disabled.
+
+## Accessibility (WCAG AA) verification checklist
+
+The UI is designed with AA-oriented contrast tokens for both light and dark themes.
+Use this quick manual checklist after deploy:
+
+1. **Theme parity**
+   - Toggle light/dark mode in the top navigation.
+   - Verify text remains readable in both themes for hero, cards, forms, tables, and footer.
+
+2. **Text contrast**
+   - Confirm body text, muted text, and links are clearly readable on their backgrounds.
+   - Check status messages (`loading`, `success`, `error`) in forms.
+
+3. **Controls and focus visibility**
+   - Keyboard-tab through links, buttons, inputs, selects, and textareas.
+   - Ensure a visible focus indicator appears on each interactive element.
+
+4. **Data table readability**
+   - Validate header-to-cell contrast and row text clarity in the admin inquiry table.
+   - Confirm status select controls are readable and focusable.
+
+5. **Automated spot check (recommended)**
+   - Run Lighthouse accessibility audit in Chrome DevTools for both themes.
+   - Resolve any flagged contrast issues before production rollout.

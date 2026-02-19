@@ -1,12 +1,45 @@
 :root {
-  --bg: #0f1115;
-  --surface: #181c24;
-  --surface-2: #222834;
-  --text: #e8ecf3;
-  --muted: #a9b1c1;
-  --blue: #3f7cff;
-  --blue-soft: #5f93ff;
-  --border: #313948;
+  --bg: #f4f8ff;
+  --bg-grad-start: #f7fbff;
+  --bg-grad-end: #eaf2ff;
+  --surface: #ffffff;
+  --surface-2: #e9f1ff;
+  --text: #0f172a;
+  --muted: #1f2937;
+  --link: #1d4ed8;
+  --link-hover: #1e3a8a;
+  --blue: #1d4ed8;
+  --blue-soft: #3b82f6;
+  --blue-lighter: #60a5fa;
+  --border: #94a3b8;
+  --focus: rgba(14, 116, 144, 0.38);
+  --input-bg: #ffffff;
+  --header-bg: #dbeafe;
+  --success: #166534;
+  --error: #b91c1c;
+  --loading: #1e40af;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b1220;
+  --bg-grad-start: #0b1220;
+  --bg-grad-end: #111a2e;
+  --surface: #121c30;
+  --surface-2: #18253c;
+  --text: #e8efff;
+  --muted: #d6e2f7;
+  --link: #93c5fd;
+  --link-hover: #bfdbfe;
+  --blue: #3b82f6;
+  --blue-soft: #60a5fa;
+  --blue-lighter: #93c5fd;
+  --border: #2b3d60;
+  --focus: rgba(125, 211, 252, 0.45);
+  --input-bg: #111b2f;
+  --header-bg: #16253d;
+  --success: #9ee7b3;
+  --error: #fecaca;
+  --loading: #bfdbfe;
 }
 
 * {
@@ -16,9 +49,17 @@
 body {
   margin: 0;
   font-family: Arial, Helvetica, sans-serif;
-  background: linear-gradient(180deg, #0d1016 0%, #121722 100%);
+  background: linear-gradient(180deg, var(--bg-grad-start) 0%, var(--bg-grad-end) 100%);
   color: var(--text);
   line-height: 1.6;
+}
+
+a {
+  color: var(--link);
+}
+
+a:hover {
+  color: var(--link-hover);
 }
 
 .container {
@@ -27,10 +68,11 @@ body {
 }
 
 .topbar {
-  background: rgba(10, 12, 17, 0.95);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
+  backdrop-filter: blur(6px);
 }
 
 .nav {
@@ -47,45 +89,79 @@ body {
 }
 
 .logo-link {
-  color: #dbe5ff;
+  color: var(--text);
   text-decoration: none;
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
   padding: 0.28rem 0.7rem;
-  border: 1px solid rgba(95, 147, 255, 0.7);
+  border: 1px solid var(--blue-lighter);
   border-radius: 999px;
-  background: rgba(63, 124, 255, 0.16);
+  background: color-mix(in srgb, var(--blue-lighter) 18%, transparent);
   font-weight: 700;
   transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .logo-link:hover {
-  color: #f2f6ff;
-  background: rgba(95, 147, 255, 0.22);
-  border-color: rgba(95, 147, 255, 0.95);
+  color: var(--text);
+  background: color-mix(in srgb, var(--blue-lighter) 26%, transparent);
+  border-color: var(--blue-soft);
 }
 
 .logo-home {
   font-size: 0.7rem;
   letter-spacing: 0.7px;
   text-transform: uppercase;
-  color: #d5e1fb;
-  background: rgba(11, 15, 24, 0.5);
-  border: 1px solid rgba(95, 147, 255, 0.45);
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 65%, transparent);
+  border: 1px solid var(--blue-lighter);
   border-radius: 999px;
   padding: 0.12rem 0.45rem;
+}
+
+nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 nav a {
   color: var(--muted);
   text-decoration: none;
-  margin-left: 1.2rem;
   font-size: 0.95rem;
 }
 
 nav a:hover {
-  color: var(--blue-soft);
+  color: var(--link);
+}
+
+.theme-toggle {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  border-color: var(--blue-soft);
+  background: color-mix(in srgb, var(--blue-lighter) 20%, var(--surface));
+}
+
+.theme-toggle:focus-visible,
+.logo-link:focus-visible,
+nav a:focus-visible,
+.btn:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue-soft) 75%, transparent);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px var(--focus);
 }
 
 .hero {
@@ -93,7 +169,7 @@ nav a:hover {
 }
 
 .tag {
-  color: var(--blue-soft);
+  color: var(--link);
   margin: 0 0 0.8rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -116,8 +192,8 @@ nav a:hover {
 
 .btn {
   display: inline-block;
-  background: linear-gradient(135deg, var(--blue), #2f67db);
-  color: white;
+  background: linear-gradient(135deg, var(--blue), #1e40af);
+  color: #ffffff;
   text-decoration: none;
   padding: 0.75rem 1.1rem;
   border-radius: 8px;
@@ -134,7 +210,7 @@ nav a:hover {
 }
 
 .section-alt {
-  background: rgba(32, 38, 49, 0.45);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
@@ -154,7 +230,7 @@ nav a:hover {
 
 .card h4 {
   margin: 0 0 0.5rem;
-  color: #d4deef;
+  color: var(--text);
 }
 
 .card p {
@@ -184,7 +260,7 @@ nav a:hover {
 .contact-form label {
   display: block;
   margin: 0.7rem 0 0.35rem;
-  color: #c8d1e1;
+  color: var(--text);
   font-weight: 600;
   font-size: 0.9rem;
 }
@@ -193,12 +269,27 @@ nav a:hover {
 .contact-form select,
 .contact-form textarea {
   width: 100%;
-  background: #111722;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
   padding: 0.65rem 0.7rem;
   font: inherit;
+}
+
+.contact-form input::placeholder,
+.contact-form textarea::placeholder,
+.admin-auth input::placeholder,
+.admin-filters input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, var(--surface));
+}
+
+.contact-form input:focus,
+.contact-form select:focus,
+.contact-form textarea:focus {
+  outline: none;
+  border-color: var(--blue-soft);
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .honeypot-wrap {
@@ -207,14 +298,6 @@ nav a:hover {
   width: 1px;
   height: 1px;
   overflow: hidden;
-}
-
-.contact-form input:focus,
-.contact-form select:focus,
-.contact-form textarea:focus {
-  outline: none;
-  border-color: var(--blue-soft);
-  box-shadow: 0 0 0 2px rgba(95, 147, 255, 0.2);
 }
 
 .btn-submit {
@@ -235,15 +318,15 @@ nav a:hover {
 }
 
 .form-status-loading {
-  color: #b3c5eb;
+  color: var(--loading);
 }
 
 .form-status-success {
-  color: #9dd9b4;
+  color: var(--success);
 }
 
 .form-status-error {
-  color: #f0aaaa;
+  color: var(--error);
 }
 
 .admin-auth {
@@ -256,14 +339,14 @@ nav a:hover {
 
 .admin-auth label {
   grid-column: 1 / -1;
-  color: #c8d1e1;
+  color: var(--text);
   font-weight: 600;
   font-size: 0.9rem;
 }
 
 .admin-auth input {
   width: 100%;
-  background: #111722;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
@@ -274,7 +357,7 @@ nav a:hover {
 .admin-auth input:focus {
   outline: none;
   border-color: var(--blue-soft);
-  box-shadow: 0 0 0 2px rgba(95, 147, 255, 0.2);
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .table-wrap {
@@ -301,10 +384,19 @@ nav a:hover {
   font-size: 0.9rem;
 }
 
+.inquiry-table th {
+  background: var(--header-bg);
+  color: var(--text);
+}
+
+.inquiry-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 .status-select {
   width: 100%;
   min-width: 125px;
-  background: #111722;
+  background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
@@ -334,7 +426,7 @@ nav a:hover {
 }
 
 .admin-filters label {
-  color: #c8d1e1;
+  color: var(--text);
   font-weight: 600;
   font-size: 0.85rem;
 }
@@ -342,7 +434,7 @@ nav a:hover {
 .admin-filters input,
 .admin-filters select {
   width: 100%;
-  background: #111722;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
@@ -366,7 +458,7 @@ nav a:hover {
 .admin-cards .card p {
   font-size: 1.4rem;
   margin-top: 0.4rem;
-  color: #dbe5ff;
+  color: var(--text);
 }
 
 .admin-panel {
@@ -390,18 +482,9 @@ nav a:hover {
   margin-top: 0.8rem;
 }
 
-.inquiry-table th {
-  background: #111722;
-  color: #d5e1fb;
-}
-
-.inquiry-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
 footer {
   border-top: 1px solid var(--border);
   padding: 1rem 0;
-  color: #919caf;
+  color: var(--muted);
   font-size: 0.9rem;
 }
