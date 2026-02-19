@@ -13,10 +13,37 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
+const TRUST_PROXY = process.env.TRUST_PROXY;
 const BACKUP_CRON = process.env.BACKUP_CRON || "*/15 * * * *";
 const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || ADMIN_KEY || "change-this-auth-secret";
 const usePostgres = Boolean(DATABASE_URL);
 const startTime = Date.now();
+
+function resolveTrustProxySetting() {
+  if (!TRUST_PROXY || !TRUST_PROXY.trim()) {
+    return process.env.RENDER ? 1 : false;
+  }
+
+  const normalized = TRUST_PROXY.trim().toLowerCase();
+
+  if (["true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  const hops = Number(normalized);
+  if (Number.isInteger(hops) && hops >= 0) {
+    return hops;
+  }
+
+  return TRUST_PROXY;
+}
+
+const trustProxySetting = resolveTrustProxySetting();
+app.set("trust proxy", trustProxySetting);
 
 const VALID_STATUSES = ["new", "in-progress", "resolved"];
 
@@ -1298,6 +1325,10 @@ if (!ADMIN_KEY) {
 
 if (!process.env.AUTH_JWT_SECRET) {
   console.warn("AUTH_JWT_SECRET is not set. Configure a strong secret for production account security.");
+}
+
+if (trustProxySetting) {
+  console.log(`Express trust proxy enabled: ${String(trustProxySetting)}`);
 }
 
 app.get("/health", (_req, res) => {

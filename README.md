@@ -108,6 +108,7 @@ Set these in your deployment platform to enable email notifications and monitori
 - `ALERT_EMAIL` (recipient for health-alert emails)
 - `BACKUP_CRON` (optional cron override for backup frequency; default is `*/15 * * * *`)
 - `AUTH_JWT_SECRET` (recommended in production for account session token signing)
+- `TRUST_PROXY` (recommended for reverse-proxy hosts; set `1` on Render so rate limits use real client IPs)
 
 If SMTP values are not provided, the app still works but email notifications/alerts are disabled.
 
