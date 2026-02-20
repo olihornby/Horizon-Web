@@ -68,6 +68,25 @@ As long as the service still uses the same database, your inquiry history stays 
 - In supported browsers, a save dialog appears so you can choose where to save the file.
 - In browsers without file-picker support, the CSV downloads using the browser's default download behavior.
 
+## Load testing (local)
+
+This repo includes a lightweight load test utility: `load-test.js`.
+
+Usage:
+- `node load-test.js <baseUrl> <path> <requests> <concurrency> <method>`
+
+Examples:
+- Baseline health endpoint:
+   - `node load-test.js http://localhost:3000 /health 1000 100 GET`
+- Inquiry submission endpoint:
+   - `node load-test.js http://localhost:3000 /api/inquiries 400 40 POST`
+
+Result fields include throughput, success count, rate-limited count, failed count, and latency percentiles (`p50`, `p95`, `p99`).
+
+Important:
+- `POST /api/inquiries` is rate-limited by design (anti-spam), so high-volume tests from one IP will return many `429` responses.
+- To measure raw backend capacity (instead of anti-spam behavior), use `/health` or temporarily increase rate-limit settings in a staging environment.
+
 ## Admin features
 
 - Status workflow: `new`, `in-progress`, `resolved`
@@ -121,8 +140,26 @@ Set these in your deployment platform to enable email notifications and monitori
 - `BACKLOG_FLUSH_CRON` (optional cron override for queued inquiry retry frequency; default is `*/2 * * * *`)
 - `AUTH_JWT_SECRET` (recommended in production for account session token signing)
 - `TRUST_PROXY` (recommended for reverse-proxy hosts; set `1` on Render so rate limits use real client IPs)
+- `ENABLE_SECURITY_HEADERS` (optional, default `true`; enables CSP and hardening headers)
+- `SECURITY_HSTS_ENABLED` (optional, default `true` on Render, else `false`; sends HSTS on HTTPS requests)
+- `REQUEST_LOGGING_ENABLED` (optional, default `true`; structured JSON request logs with request IDs)
+- `LOGIN_RATE_LIMIT_MAX` (optional, default `15` per 15 minutes)
+- `REGISTER_RATE_LIMIT_MAX` (optional, default `25` per 15 minutes)
+- `ADMIN_RATE_LIMIT_MAX` (optional, default `250` per 15 minutes)
+- `FAILED_LOGIN_LIMIT` (optional, default `8`; lock user/IP combo after failed attempts)
+- `FAILED_LOGIN_LOCK_MS` (optional, default `900000` / 15 minutes)
 
 If SMTP values are not provided, the app still works but email notifications/alerts are disabled.
+
+## Security hardening defaults
+
+The backend now includes:
+
+- Security headers (`Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, etc.)
+- Optional HSTS on HTTPS
+- Structured request logging with `X-Request-Id`
+- Separate rate limits for login, registration, and admin routes
+- Temporary lockout after repeated failed login attempts
 
 If you see `ETIMEDOUT` from Nodemailer on Render, your SMTP host/port is unreachable or blocked. In that case:
 - Verify `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, and `SMTP_PASS` exactly match your provider docs.

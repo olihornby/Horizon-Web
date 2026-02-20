@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -22,6 +23,16 @@ const startTime = Date.now();
 const SMTP_CONNECTION_TIMEOUT_MS = Math.max(1000, Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000));
 const SMTP_SOCKET_TIMEOUT_MS = Math.max(1000, Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 10000));
 const SMTP_RETRY_COOLDOWN_MS = Math.max(0, Number(process.env.SMTP_RETRY_COOLDOWN_MS || 300000));
+const REQUEST_LOGGING_ENABLED = String(process.env.REQUEST_LOGGING_ENABLED || "true") === "true";
+const LOGIN_RATE_LIMIT_MAX = Math.max(1, Number(process.env.LOGIN_RATE_LIMIT_MAX || 15));
+const REGISTER_RATE_LIMIT_MAX = Math.max(1, Number(process.env.REGISTER_RATE_LIMIT_MAX || 25));
+const ADMIN_RATE_LIMIT_MAX = Math.max(1, Number(process.env.ADMIN_RATE_LIMIT_MAX || 250));
+const FAILED_LOGIN_LIMIT = Math.max(1, Number(process.env.FAILED_LOGIN_LIMIT || 8));
+const FAILED_LOGIN_LOCK_MS = Math.max(1000, Number(process.env.FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
+const ENABLE_SECURITY_HEADERS = String(process.env.ENABLE_SECURITY_HEADERS || "true") === "true";
+const SECURITY_HSTS_ENABLED = String(
+  process.env.SECURITY_HSTS_ENABLED || (process.env.RENDER ? "true" : "false")
+) === "true";
 
 function resolveTrustProxySetting() {
   if (!TRUST_PROXY || !TRUST_PROXY.trim()) {
@@ -73,6 +84,7 @@ const backupsDir = path.join(__dirname, "backups");
 let pool = null;
 let mailer = null;
 let mailerCooldownUntil = 0;
+const failedLoginAttempts = new Map();
 
 const monitorState = {
   storageHealthy: true,
@@ -116,6 +128,56 @@ function writeJsonArray(filePath, data) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function safeRequestPath(req) {
+  return String(req.originalUrl || req.url || "").split("?")[0] || "/";
+}
+
+function structuredLog(level, message, data) {
+  const payload = {
+    at: nowIso(),
+    level,
+    message,
+    ...(data || {})
+  };
+
+  const line = JSON.stringify(payload);
+  if (level === "error") {
+    console.error(line);
+    return;
+  }
+
+  console.log(line);
+}
+
+function loginAttemptKey(req, identity) {
+  const ip = req.ip || "unknown";
+  return `${ip}:${String(identity || "").toLowerCase()}`;
+}
+
+function loginLockRemainingMs(req, identity) {
+  const key = loginAttemptKey(req, identity);
+  const item = failedLoginAttempts.get(key);
+  if (!item || !item.lockedUntil) {
+    return 0;
+  }
+
+  const remaining = item.lockedUntil - Date.now();
+  return remaining > 0 ? remaining : 0;
+}
+
+function recordFailedLogin(req, identity) {
+  const key = loginAttemptKey(req, identity);
+  const existing = failedLoginAttempts.get(key) || { count: 0, lockedUntil: 0 };
+  const nextCount = existing.count + 1;
+  const lockedUntil = nextCount >= FAILED_LOGIN_LIMIT ? Date.now() + FAILED_LOGIN_LOCK_MS : 0;
+  failedLoginAttempts.set(key, { count: nextCount, lockedUntil });
+}
+
+function clearFailedLogin(req, identity) {
+  const key = loginAttemptKey(req, identity);
+  failedLoginAttempts.delete(key);
 }
 
 function sanitizeStatus(status) {
@@ -1388,14 +1450,36 @@ const contactLimiter = rateLimit({
   }
 });
 
-const authLimiter = rateLimit({
+const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 40,
+  max: LOGIN_RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     ok: false,
-    message: "Too many authentication attempts. Please try again later."
+    message: "Too many login attempts. Please try again later."
+  }
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: REGISTER_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    message: "Too many registration attempts. Please try again later."
+  }
+});
+
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: ADMIN_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    ok: false,
+    message: "Too many admin requests. Please slow down and try again shortly."
   }
 });
 
@@ -1431,9 +1515,65 @@ const upload = multer({
   }
 });
 
+app.disable("x-powered-by");
+
+if (ENABLE_SECURITY_HEADERS) {
+  app.use((req, res, next) => {
+    const csp = [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self'"
+    ].join("; ");
+
+    res.setHeader("Content-Security-Policy", csp);
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()") ;
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+
+    if (SECURITY_HSTS_ENABLED && (req.secure || req.headers["x-forwarded-proto"] === "https")) {
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+    }
+
+    return next();
+  });
+}
+
+if (REQUEST_LOGGING_ENABLED) {
+  app.use((req, res, next) => {
+    const requestId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).slice(0, 18);
+    const startedAt = Date.now();
+    req.requestId = requestId;
+    res.setHeader("X-Request-Id", requestId);
+
+    res.on("finish", () => {
+      structuredLog("info", "request.completed", {
+        request_id: requestId,
+        method: req.method,
+        path: safeRequestPath(req),
+        status: res.statusCode,
+        ip: req.ip,
+        duration_ms: Date.now() - startedAt
+      });
+    });
+
+    return next();
+  });
+}
+
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(express.static(__dirname));
+app.use("/api/admin", adminLimiter);
 
 if (!ADMIN_KEY) {
   console.warn("ADMIN_KEY is not set. Admin endpoints will be unavailable until configured.");
@@ -1476,7 +1616,7 @@ app.get("/account", (_req, res) => {
   return res.redirect("/account.html");
 });
 
-app.post("/api/auth/register", authLimiter, async (req, res) => {
+app.post("/api/auth/register", registerLimiter, async (req, res) => {
   const username = String(req.body.username || "").trim();
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = String(req.body.password || "");
@@ -1524,7 +1664,7 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", authLimiter, async (req, res) => {
+app.post("/api/auth/login", loginLimiter, async (req, res) => {
   const identity = String(req.body.identity || req.body.username || req.body.email || "").trim();
   const password = String(req.body.password || "");
 
@@ -1532,17 +1672,29 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     return res.status(400).json({ ok: false, message: "Username/email and password are required." });
   }
 
+  const lockRemainingMs = loginLockRemainingMs(req, identity);
+  if (lockRemainingMs > 0) {
+    return res.status(429).json({
+      ok: false,
+      message: "Too many failed login attempts. Please try again later."
+    });
+  }
+
   try {
     const user = await findUserByIdentity(identity);
 
     if (!user) {
+      recordFailedLogin(req, identity);
       return res.status(401).json({ ok: false, message: "Invalid login credentials." });
     }
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      recordFailedLogin(req, identity);
       return res.status(401).json({ ok: false, message: "Invalid login credentials." });
     }
+
+    clearFailedLogin(req, identity);
 
     const token = signUserToken(user);
     return res.json({ ok: true, token, user: toPublicUser(user) });
@@ -1768,7 +1920,7 @@ app.post("/api/inquiries", contactLimiter, (req, res, next) => {
   }
 });
 
-app.get("/api/inquiries", requireAdmin, async (req, res) => {
+app.get("/api/inquiries", adminLimiter, requireAdmin, async (req, res) => {
   try {
     const result = await listInquiries({
       q: (req.query.q || "").toString().trim(),
@@ -1800,7 +1952,7 @@ app.get("/api/inquiries", requireAdmin, async (req, res) => {
   }
 });
 
-app.get("/api/inquiries.csv", requireAdmin, async (_req, res) => {
+app.get("/api/inquiries.csv", adminLimiter, requireAdmin, async (_req, res) => {
   try {
     const rows = (await listInquiries({ page: 1, pageSize: 10000 })).rows;
     const csv = toInquiriesCsv(rows);
@@ -1817,7 +1969,7 @@ app.get("/api/inquiries.csv", requireAdmin, async (_req, res) => {
   }
 });
 
-app.get("/api/inquiries/analytics", requireAdmin, async (_req, res) => {
+app.get("/api/inquiries/analytics", adminLimiter, requireAdmin, async (_req, res) => {
   try {
     const analytics = await getAnalytics();
     return res.json({ ok: true, analytics });
@@ -1827,7 +1979,7 @@ app.get("/api/inquiries/analytics", requireAdmin, async (_req, res) => {
   }
 });
 
-app.get("/api/inquiries/audit", requireAdmin, async (req, res) => {
+app.get("/api/inquiries/audit", adminLimiter, requireAdmin, async (req, res) => {
   try {
     const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
     const items = await listAudit(limit);
@@ -1838,7 +1990,7 @@ app.get("/api/inquiries/audit", requireAdmin, async (req, res) => {
   }
 });
 
-app.get("/api/inquiries/:id/attachment", requireAdmin, async (req, res) => {
+app.get("/api/inquiries/:id/attachment", adminLimiter, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     return res.status(400).json({ ok: false, message: "Invalid inquiry id." });
@@ -1864,7 +2016,7 @@ app.get("/api/inquiries/:id/attachment", requireAdmin, async (req, res) => {
   }
 });
 
-app.patch("/api/inquiries/:id/status", requireAdmin, async (req, res) => {
+app.patch("/api/inquiries/:id/status", adminLimiter, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     return res.status(400).json({ ok: false, message: "Invalid inquiry id." });
@@ -1886,7 +2038,7 @@ app.patch("/api/inquiries/:id/status", requireAdmin, async (req, res) => {
   }
 });
 
-app.patch("/api/inquiries/:id", requireAdmin, async (req, res) => {
+app.patch("/api/inquiries/:id", adminLimiter, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     return res.status(400).json({ ok: false, message: "Invalid inquiry id." });
@@ -1911,7 +2063,7 @@ app.patch("/api/inquiries/:id", requireAdmin, async (req, res) => {
   }
 });
 
-app.delete("/api/inquiries/:id", requireAdmin, async (req, res) => {
+app.delete("/api/inquiries/:id", adminLimiter, requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     return res.status(400).json({ ok: false, message: "Invalid inquiry id." });
@@ -1929,6 +2081,28 @@ app.delete("/api/inquiries/:id", requireAdmin, async (req, res) => {
     console.error("Failed to delete inquiry", error);
     return res.status(500).json({ ok: false, message: "Unable to delete inquiry." });
   }
+});
+
+app.use((error, req, res, _next) => {
+  structuredLog("error", "request.unhandled_error", {
+    request_id: req.requestId || null,
+    method: req.method,
+    path: safeRequestPath(req),
+    ip: req.ip,
+    message: error && error.message ? error.message : "Unknown server error"
+  });
+
+  if (res.headersSent) {
+    return;
+  }
+
+  const isApiRequest = safeRequestPath(req).startsWith("/api/");
+  if (isApiRequest) {
+    res.status(500).json({ ok: false, message: "Internal server error." });
+    return;
+  }
+
+  res.status(500).send("Internal server error.");
 });
 
 initStorage()
