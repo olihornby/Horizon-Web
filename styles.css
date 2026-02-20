@@ -640,6 +640,23 @@ body.menu-open {
   border-top: 1px solid var(--border);
 }
 
+.side-menu-settings {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.side-menu-settings-summary {
+  cursor: pointer;
+  padding: 0.58rem 0.65rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.side-menu-settings-body {
+  padding: 0 0.65rem 0.65rem;
+}
+
 .side-menu-user {
   margin: 0 0 0.8rem;
   color: var(--muted);
@@ -659,7 +676,7 @@ body.menu-open {
 }
 
 .side-menu-accessibility {
-  margin-bottom: 0.9rem;
+  margin-bottom: 0.65rem;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -1037,6 +1054,21 @@ body.menu-open {
   color: var(--text);
   border-radius: 8px;
   padding: 0.6rem 0.65rem;
+}
+
+.account-form select {
+  width: 100%;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.6rem 0.65rem;
+}
+
+.input-hint {
+  margin: 0.22rem 0 0.12rem;
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 .progress-list {

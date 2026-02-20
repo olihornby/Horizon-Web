@@ -42,7 +42,6 @@
       <div class="container">
         <div class="account-headline">
           <h3>Your Project Progress</h3>
-          <button class="btn btn-submit" type="button" id="account-logout" hidden>Log out</button>
         </div>
 
         <div id="dashboard-stats" class="dashboard-stats" hidden>
@@ -62,6 +61,59 @@
       </div>
     </section>
 
+    <section class="section" id="settings-section" hidden>
+      <div class="container">
+        <h3>Account Settings</h3>
+        <p>Manage your contact details, password, and sessions.</p>
+
+        <div class="account-grid">
+          <article class="card">
+            <h4>Profile</h4>
+            <form id="settings-profile-form" class="account-form" autocomplete="off">
+              <label for="settings-email">Email</label>
+              <input id="settings-email" type="email" required />
+
+              <label for="settings-phone">Phone</label>
+              <select id="settings-phone-country">
+                <option value="US">United States (+1)</option>
+                <option value="CA">Canada (+1)</option>
+                <option value="GB">United Kingdom (+44)</option>
+                <option value="AU">Australia (+61)</option>
+                <option value="IN">India (+91)</option>
+                <option value="OTHER">Other (international)</option>
+              </select>
+              <input id="settings-phone" type="tel" inputmode="tel" placeholder="+1 555 123 4567" />
+              <p class="input-hint" id="settings-phone-hint">Example format: (555) 123-4567</p>
+
+              <button class="btn btn-submit" type="submit">Save Profile</button>
+            </form>
+          </article>
+
+          <article class="card">
+            <h4>Security</h4>
+            <form id="settings-password-form" class="account-form" autocomplete="off">
+              <label for="settings-current-password">Current Password</label>
+              <input id="settings-current-password" type="password" required />
+
+              <label for="settings-new-password">New Password</label>
+              <input id="settings-new-password" type="password" minlength="8" required />
+
+              <label for="settings-confirm-password">Confirm New Password</label>
+              <input id="settings-confirm-password" type="password" minlength="8" required />
+
+              <button class="btn btn-submit" type="submit">Change Password</button>
+            </form>
+          </article>
+        </div>
+
+        <article class="card admin-panel">
+          <h4>Sessions & Devices</h4>
+          <p id="settings-session-info">Session information will appear here after login.</p>
+          <button class="btn btn-submit" type="button" id="revoke-other-sessions">Log Out Other Sessions</button>
+        </article>
+      </div>
+    </section>
+
     <section class="section" id="auth-section">
       <div class="container">
         <h3>Client Portal</h3>
@@ -71,7 +123,7 @@
           <article class="card">
             <h4>Sign In</h4>
             <form id="login-form" class="account-form" autocomplete="off">
-              <label for="login-identity">Username or Email</label>
+              <label for="login-identity">Username, Email, or Phone</label>
               <input id="login-identity" type="text" required />
 
               <label for="login-password">Password</label>
@@ -89,6 +141,18 @@
 
               <label for="register-email">Email</label>
               <input id="register-email" type="email" required />
+
+              <label for="register-phone">Phone (optional)</label>
+              <select id="register-phone-country">
+                <option value="US">United States (+1)</option>
+                <option value="CA">Canada (+1)</option>
+                <option value="GB">United Kingdom (+44)</option>
+                <option value="AU">Australia (+61)</option>
+                <option value="IN">India (+91)</option>
+                <option value="OTHER">Other (international)</option>
+              </select>
+              <input id="register-phone" type="tel" inputmode="tel" placeholder="+1 555 123 4567" />
+              <p class="input-hint" id="register-phone-hint">Example format: (555) 123-4567</p>
 
               <label for="register-password">Password</label>
               <input id="register-password" type="password" minlength="8" required />
@@ -119,8 +183,19 @@
       const loginSubmitButton = loginForm ? loginForm.querySelector("button[type='submit']") : null;
       const progressList = document.getElementById("progress-list");
       const progressSection = document.getElementById("progress-section");
+      const settingsSection = document.getElementById("settings-section");
       const authSection = document.getElementById("auth-section");
-      const logoutButton = document.getElementById("account-logout");
+      const settingsProfileForm = document.getElementById("settings-profile-form");
+      const settingsPasswordForm = document.getElementById("settings-password-form");
+      const settingsEmailInput = document.getElementById("settings-email");
+      const settingsPhoneInput = document.getElementById("settings-phone");
+      const settingsPhoneCountry = document.getElementById("settings-phone-country");
+      const settingsPhoneHint = document.getElementById("settings-phone-hint");
+      const settingsCurrentPasswordInput = document.getElementById("settings-current-password");
+      const settingsNewPasswordInput = document.getElementById("settings-new-password");
+      const settingsConfirmPasswordInput = document.getElementById("settings-confirm-password");
+      const settingsSessionInfo = document.getElementById("settings-session-info");
+      const revokeOtherSessionsButton = document.getElementById("revoke-other-sessions");
 
       const dashboardStats = document.getElementById("dashboard-stats");
       const progressGraphs = document.getElementById("progress-graphs");
@@ -130,10 +205,131 @@
       const statBudget = document.getElementById("stat-budget");
 
       const auth = window.HorizonAuth;
+      const registerPhoneInput = document.getElementById("register-phone");
+      const registerPhoneCountry = document.getElementById("register-phone-country");
+      const registerPhoneHint = document.getElementById("register-phone-hint");
       let loginAbortController = null;
       let loginInFlight = false;
       let loginCooldownUntil = 0;
       let loginCooldownInterval = null;
+
+      const PHONE_COUNTRY = {
+        US: { dial: "+1", example: "(555) 123-4567" },
+        CA: { dial: "+1", example: "(555) 123-4567" },
+        GB: { dial: "+44", example: "07123 456789" },
+        AU: { dial: "+61", example: "0412 345 678" },
+        IN: { dial: "+91", example: "09876 543210" },
+        OTHER: { dial: "+", example: "+49 1512 3456789" }
+      };
+
+      function digitsOnly(value) {
+        return String(value || "").replace(/\D/g, "");
+      }
+
+      function detectPhoneCountry(value) {
+        const text = String(value || "").trim();
+        if (!text.startsWith("+")) {
+          return "US";
+        }
+
+        if (text.startsWith("+44")) {
+          return "GB";
+        }
+        if (text.startsWith("+61")) {
+          return "AU";
+        }
+        if (text.startsWith("+91")) {
+          return "IN";
+        }
+        if (text.startsWith("+1")) {
+          return "US";
+        }
+
+        return "OTHER";
+      }
+
+      function normalizePhone(countryCode, value) {
+        const raw = String(value || "").trim();
+        if (!raw) {
+          return "";
+        }
+
+        if (raw.startsWith("+")) {
+          const digits = raw.slice(1).replace(/\D/g, "");
+          return digits.length >= 7 ? `+${digits}` : "";
+        }
+
+        let digits = digitsOnly(raw);
+        if (!digits) {
+          return "";
+        }
+
+        const cfg = PHONE_COUNTRY[countryCode] || PHONE_COUNTRY.US;
+        if (countryCode !== "OTHER") {
+          if ((countryCode === "US" || countryCode === "CA") && digits.length === 11 && digits.startsWith("1")) {
+            digits = digits.slice(1);
+          }
+
+          digits = digits.replace(/^0+/, "");
+          const normalized = `${cfg.dial}${digits}`;
+          const normalizedDigits = normalized.replace(/\D/g, "");
+          return normalizedDigits.length >= 7 ? normalized : "";
+        }
+
+        return digits.length >= 7 ? `+${digits}` : "";
+      }
+
+      function formatPhoneDisplay(countryCode, value) {
+        const normalized = normalizePhone(countryCode, value);
+        if (!normalized) {
+          return "";
+        }
+
+        if (countryCode === "US" || countryCode === "CA") {
+          const digits = normalized.replace(/^\+1/, "");
+          if (digits.length === 10) {
+            return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+          }
+        }
+
+        return normalized;
+      }
+
+      function syncPhoneHint(countrySelect, phoneInput, hintElement) {
+        const selected = countrySelect && countrySelect.value ? countrySelect.value : "US";
+        const cfg = PHONE_COUNTRY[selected] || PHONE_COUNTRY.US;
+
+        if (phoneInput) {
+          phoneInput.placeholder = cfg.example;
+        }
+
+        if (hintElement) {
+          hintElement.textContent = `Example format: ${cfg.example}`;
+        }
+      }
+
+      function wirePhoneField(countrySelect, phoneInput, hintElement) {
+        if (!countrySelect || !phoneInput) {
+          return;
+        }
+
+        syncPhoneHint(countrySelect, phoneInput, hintElement);
+
+        countrySelect.addEventListener("change", function () {
+          syncPhoneHint(countrySelect, phoneInput, hintElement);
+          const formatted = formatPhoneDisplay(countrySelect.value, phoneInput.value);
+          if (formatted) {
+            phoneInput.value = formatted;
+          }
+        });
+
+        phoneInput.addEventListener("blur", function () {
+          const formatted = formatPhoneDisplay(countrySelect.value, phoneInput.value);
+          if (formatted) {
+            phoneInput.value = formatted;
+          }
+        });
+      }
 
       function setLoginControlsDisabled(isDisabled, buttonText) {
         if (loginSubmitButton) {
@@ -332,8 +528,46 @@
 
       function setLoggedInState(isLoggedIn) {
         progressSection.hidden = !isLoggedIn;
+        settingsSection.hidden = !isLoggedIn;
         authSection.hidden = isLoggedIn;
-        logoutButton.hidden = !isLoggedIn;
+      }
+
+      function renderSettings(payload) {
+        const user = payload && payload.user ? payload.user : null;
+        const security = payload && payload.security ? payload.security : {};
+
+        if (!user) {
+          settingsEmailInput.value = "";
+          settingsPhoneInput.value = "";
+          settingsSessionInfo.textContent = "Session information will appear here after login.";
+          return;
+        }
+
+        settingsEmailInput.value = user.email || "";
+        settingsPhoneInput.value = user.phone || "";
+        if (settingsPhoneCountry) {
+          settingsPhoneCountry.value = detectPhoneCountry(user.phone || "");
+          syncPhoneHint(settingsPhoneCountry, settingsPhoneInput, settingsPhoneHint);
+          if (settingsPhoneInput.value) {
+            settingsPhoneInput.value = formatPhoneDisplay(settingsPhoneCountry.value, settingsPhoneInput.value);
+          }
+        }
+
+        const parts = [];
+        parts.push("Current session started: " + (security.current_session_started_at ? new Date(security.current_session_started_at).toLocaleString() : "n/a"));
+        parts.push("Last login: " + (security.last_login_at ? new Date(security.last_login_at).toLocaleString() : "n/a"));
+        parts.push("Last login IP: " + (security.last_login_ip || "n/a"));
+        if (security.last_login_user_agent) {
+          parts.push("Device: " + security.last_login_user_agent);
+        }
+
+        settingsSessionInfo.textContent = parts.join(". ");
+      }
+
+      async function loadUserSettings() {
+        const payload = await auth.fetchJson("/api/user/settings");
+        renderSettings(payload);
+        auth.setSession(auth.getToken(), payload.user);
       }
 
       async function loadMeAndProjects() {
@@ -351,11 +585,13 @@
 
           const projectsPayload = await auth.fetchJson("/api/user/progress");
           renderProjects(projectsPayload.projects || []);
+          await loadUserSettings();
           setStatus("Logged in. Project progress loaded.", "form-status-success");
         } catch (error) {
           auth.clearSession();
           setLoggedInState(false);
           renderProjects([]);
+          renderSettings(null);
           setStatus(error.message || "Session expired. Please log in again.", "form-status-error");
         }
       }
@@ -379,7 +615,7 @@
         const password = loginPasswordInput.value;
 
         if (!identity || !password) {
-          setStatus("Username/email and password are required.", "form-status-error");
+          setStatus("Username/email/phone and password are required.", "form-status-error");
           return;
         }
 
@@ -437,7 +673,13 @@
 
         const username = document.getElementById("register-username").value.trim();
         const email = document.getElementById("register-email").value.trim();
+        const phone = registerPhoneInput ? normalizePhone(registerPhoneCountry ? registerPhoneCountry.value : "US", registerPhoneInput.value.trim()) : "";
         const password = document.getElementById("register-password").value;
+
+        if (registerPhoneInput && registerPhoneInput.value.trim() && !phone) {
+          setStatus("Please enter a valid phone number for the selected country.", "form-status-error");
+          return;
+        }
 
         setStatus("Creating account...", "form-status-loading");
 
@@ -445,7 +687,7 @@
           const response = await fetch("/api/auth/register", {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ username, email, password })
+            body: JSON.stringify({ username, email, phone, password })
           });
 
           const payload = await response.json();
@@ -461,12 +703,99 @@
         }
       });
 
-      logoutButton.addEventListener("click", function () {
-        auth.clearSession();
-        setLoggedInState(false);
-        renderProjects([]);
-        setStatus("Logged out.", "form-status-success");
-      });
+      if (settingsProfileForm) {
+        settingsProfileForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          const email = settingsEmailInput.value.trim();
+          const phone = normalizePhone(settingsPhoneCountry ? settingsPhoneCountry.value : "US", settingsPhoneInput.value.trim());
+
+          if (!email) {
+            setStatus("Email is required.", "form-status-error");
+            return;
+          }
+
+          if (settingsPhoneInput.value.trim() && !phone) {
+            setStatus("Please enter a valid phone number for the selected country.", "form-status-error");
+            return;
+          }
+
+          try {
+            const payload = await auth.fetchJson("/api/user/settings", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email, phone })
+            });
+
+            auth.setSession(auth.getToken(), payload.user);
+            await loadUserSettings();
+            setStatus("Account profile updated.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to update account settings.", "form-status-error");
+          }
+        });
+      }
+
+      if (settingsPasswordForm) {
+        settingsPasswordForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          const currentPassword = settingsCurrentPasswordInput.value;
+          const newPassword = settingsNewPasswordInput.value;
+          const confirmPassword = settingsConfirmPasswordInput.value;
+
+          if (!currentPassword || !newPassword) {
+            setStatus("Current and new password are required.", "form-status-error");
+            return;
+          }
+
+          if (newPassword.length < 8) {
+            setStatus("New password must be at least 8 characters.", "form-status-error");
+            return;
+          }
+
+          if (newPassword !== confirmPassword) {
+            setStatus("New password and confirm password do not match.", "form-status-error");
+            return;
+          }
+
+          try {
+            await auth.fetchJson("/api/user/settings/password", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ currentPassword, newPassword })
+            });
+
+            settingsPasswordForm.reset();
+            setStatus("Password changed successfully.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to change password.", "form-status-error");
+          }
+        });
+      }
+
+      if (revokeOtherSessionsButton) {
+        revokeOtherSessionsButton.addEventListener("click", async function () {
+          revokeOtherSessionsButton.disabled = true;
+
+          try {
+            const payload = await auth.fetchJson("/api/user/settings/sessions/revoke-others", {
+              method: "POST"
+            });
+
+            auth.setSession(payload.token, payload.user);
+            await loadUserSettings();
+            setStatus("Other sessions logged out. This session remains active.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to revoke other sessions.", "form-status-error");
+          } finally {
+            revokeOtherSessionsButton.disabled = false;
+          }
+        });
+      }
+
+      wirePhoneField(registerPhoneCountry, registerPhoneInput, registerPhoneHint);
+      wirePhoneField(settingsPhoneCountry, settingsPhoneInput, settingsPhoneHint);
 
       loadMeAndProjects();
     })();

@@ -104,12 +104,22 @@ Backlog admin APIs (admin key required):
 ## Client portal features
 
 - User account registration and login
+- Sign in supports username, email, or phone number
+- Optional phone number can be stored during account registration
 - JWT-based authenticated sessions for portal APIs
 - Project progress dashboard for logged-in users
 - Dashboard stats/graphs: completion, budget usage, and weeks-to-deadline
 - Left-side slide-out menu with hamburger button and logout action
+- Side-menu **Settings** area for accessibility controls and logout
+- Account settings in portal: profile (email/phone), password change, and "log out other sessions"
 - Admin progress update API: `POST /api/admin/user-progress` (requires admin key)
 - Admin account reset API: `POST /api/admin/users/reset` (requires admin key; clears all client accounts/progress)
+
+Account settings APIs (authenticated user):
+- `GET /api/user/settings`
+- `PATCH /api/user/settings` with `{ "email": "...", "phone": "..." }`
+- `POST /api/user/settings/password` with `{ "currentPassword": "...", "newPassword": "..." }`
+- `POST /api/user/settings/sessions/revoke-others`
 
 `POST /api/admin/user-progress` accepts:
 - `identity` (username/email)
@@ -169,7 +179,8 @@ If you see `ETIMEDOUT` from Nodemailer on Render, your SMTP host/port is unreach
 ## Accessibility (WCAG AA) verification checklist
 
 The UI is designed with AA-oriented contrast tokens for both light and dark themes.
-Accessibility tools are available in the slide-out side menu under the **Accessibility** section:
+Accessibility and logout controls are available in the slide-out side menu under **Settings**.
+Accessibility tools are nested in the **Accessibility** section inside Settings:
 
 - Ultra contrast toggle
 - Text size scaling

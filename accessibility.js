@@ -109,7 +109,8 @@
       existing.remove();
     }
 
-    const host = panel.querySelector(".side-menu-footer") || panel;
+    const settingsBody = panel.querySelector(".side-menu-settings-body");
+    const host = settingsBody || panel.querySelector(".side-menu-footer") || panel;
     const section = document.createElement("details");
     section.className = "side-menu-accessibility";
     section.id = "side-menu-accessibility";
@@ -262,6 +263,11 @@
     if (!opened) {
       setStatus("Menu is unavailable on this page.");
       return;
+    }
+
+    const settings = document.querySelector("#side-menu-settings");
+    if (settings) {
+      settings.open = true;
     }
 
     const section = document.querySelector("#side-menu-accessibility");

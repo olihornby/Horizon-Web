@@ -45,8 +45,13 @@
       "</div>" +
       '<div class="side-menu-links">' + linkMarkup + "</div>" +
       '<div class="side-menu-footer">' +
-        (isLoggedIn && user ? '<p class="side-menu-user">Logged in as <strong>' + user.username + "</strong></p>" : "") +
-        (isLoggedIn ? '<button type="button" class="btn btn-submit side-menu-logout">Log out</button>' : "") +
+        '<details class="side-menu-settings" id="side-menu-settings">' +
+          '<summary class="side-menu-settings-summary">Settings</summary>' +
+          '<div class="side-menu-settings-body">' +
+            (isLoggedIn && user ? '<p class="side-menu-user">Logged in as <strong>' + user.username + "</strong></p>" : '<p class="side-menu-user">Manage preferences and accessibility options.</p>') +
+            (isLoggedIn ? '<button type="button" class="btn btn-submit side-menu-logout">Log out</button>' : "") +
+          '</div>' +
+        '</details>' +
       "</div>";
 
     function setOpen(isOpen) {

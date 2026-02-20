@@ -130,6 +130,23 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizePhone(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const cleaned = raw.replace(/[\s().-]/g, "");
+  const hasPlus = cleaned.startsWith("+");
+  const digits = cleaned.replace(/\D/g, "");
+
+  if (digits.length < 7 || digits.length > 15) {
+    return "";
+  }
+
+  return `${hasPlus ? "+" : ""}${digits}`;
+}
+
 function safeRequestPath(req) {
   return String(req.originalUrl || req.url || "").split("?")[0] || "/";
 }
@@ -153,7 +170,9 @@ function structuredLog(level, message, data) {
 
 function loginAttemptKey(req, identity) {
   const ip = req.ip || "unknown";
-  return `${ip}:${String(identity || "").toLowerCase()}`;
+  const phoneIdentity = normalizePhone(identity);
+  const normalizedIdentity = phoneIdentity || String(identity || "").trim().toLowerCase();
+  return `${ip}:${normalizedIdentity}`;
 }
 
 function loginLockRemainingMs(req, identity) {
@@ -444,10 +463,22 @@ async function initStorage() {
       id SERIAL PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
       email TEXT NOT NULL UNIQUE,
+      phone TEXT UNIQUE,
       password_hash TEXT NOT NULL,
+      token_version INTEGER NOT NULL DEFAULT 1,
+      last_login_at TIMESTAMPTZ,
+      last_login_ip TEXT,
+      last_login_user_agent TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_user_agent TEXT");
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx ON users (phone) WHERE phone IS NOT NULL");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_project_progress (
@@ -1105,6 +1136,8 @@ function toPublicUser(user) {
     id: user.id,
     username: user.username,
     email: user.email,
+    phone: user.phone || null,
+    token_version: Number(user.token_version || 1),
     created_at: user.created_at
   };
 }
@@ -1114,7 +1147,9 @@ function signUserToken(user) {
     {
       sub: user.id,
       username: user.username,
-      email: user.email
+      email: user.email,
+      phone: user.phone || null
+      ,tv: Number(user.token_version || 1)
     },
     AUTH_JWT_SECRET,
     { expiresIn: "7d" }
@@ -1133,12 +1168,23 @@ function getBearerToken(req) {
 async function findUserById(id) {
   if (!usePostgres) {
     const users = readJsonArray(usersPath);
-    return users.find((item) => item.id === id) || null;
+    const found = users.find((item) => item.id === id) || null;
+    if (!found) {
+      return null;
+    }
+
+    return {
+      ...found,
+      token_version: Number(found.token_version || 1),
+      last_login_at: found.last_login_at || null,
+      last_login_ip: found.last_login_ip || null,
+      last_login_user_agent: found.last_login_user_agent || null
+    };
   }
 
   const result = await pool.query(
     `
-      SELECT id, username, email, password_hash, created_at
+      SELECT id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
       FROM users
       WHERE id = $1
       LIMIT 1
@@ -1151,36 +1197,48 @@ async function findUserById(id) {
 
 async function findUserByIdentity(identity) {
   const normalized = String(identity || "").trim().toLowerCase();
+  const normalizedPhone = normalizePhone(identity);
 
-  if (!normalized) {
+  if (!normalized && !normalizedPhone) {
     return null;
   }
 
   if (!usePostgres) {
     const users = readJsonArray(usersPath);
-    return users.find((item) => item.username.toLowerCase() === normalized || item.email.toLowerCase() === normalized) || null;
+    return users.find((item) => {
+      const username = String(item.username || "").toLowerCase();
+      const email = String(item.email || "").toLowerCase();
+      const phone = normalizePhone(item.phone || "");
+      return username === normalized || email === normalized || (normalizedPhone && phone === normalizedPhone);
+    }) || null;
   }
 
   const result = await pool.query(
     `
-      SELECT id, username, email, password_hash, created_at
+      SELECT id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
       FROM users
-      WHERE LOWER(username) = $1 OR LOWER(email) = $1
+      WHERE LOWER(username) = $1 OR LOWER(email) = $1 OR phone = $2
       LIMIT 1
     `,
-    [normalized]
+    [normalized, normalizedPhone || ""]
   );
 
   return result.rows[0] || null;
 }
 
-async function createUserAccount({ username, email, passwordHash }) {
+async function createUserAccount({ username, email, phone, passwordHash }) {
   const normalizedUsername = String(username || "").trim();
   const normalizedEmail = String(email || "").trim().toLowerCase();
+  const normalizedPhone = normalizePhone(phone);
 
   if (!usePostgres) {
     const users = readJsonArray(usersPath);
-    const existing = users.find((item) => item.username.toLowerCase() === normalizedUsername.toLowerCase() || item.email.toLowerCase() === normalizedEmail);
+    const existing = users.find((item) => {
+      const sameUsername = String(item.username || "").toLowerCase() === normalizedUsername.toLowerCase();
+      const sameEmail = String(item.email || "").toLowerCase() === normalizedEmail;
+      const samePhone = normalizedPhone && normalizePhone(item.phone || "") === normalizedPhone;
+      return sameUsername || sameEmail || samePhone;
+    });
 
     if (existing) {
       return null;
@@ -1191,7 +1249,12 @@ async function createUserAccount({ username, email, passwordHash }) {
       id: nextId,
       username: normalizedUsername,
       email: normalizedEmail,
+      phone: normalizedPhone || null,
       password_hash: passwordHash,
+      token_version: 1,
+      last_login_at: null,
+      last_login_ip: null,
+      last_login_user_agent: null,
       created_at: nowIso()
     };
 
@@ -1202,12 +1265,175 @@ async function createUserAccount({ username, email, passwordHash }) {
 
   const result = await pool.query(
     `
-      INSERT INTO users (username, email, password_hash)
-      VALUES ($1, $2, $3)
+      INSERT INTO users (username, email, phone, password_hash)
+      VALUES ($1, $2, $3, $4)
       ON CONFLICT DO NOTHING
-      RETURNING id, username, email, password_hash, created_at
+      RETURNING id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
     `,
-    [normalizedUsername, normalizedEmail, passwordHash]
+    [normalizedUsername, normalizedEmail, normalizedPhone || null, passwordHash]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function updateUserLoginMetadata(userId, req) {
+  const loginAt = nowIso();
+  const loginIp = req.ip || null;
+  const loginUserAgent = String(req.headers["user-agent"] || "").slice(0, 255) || null;
+
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return;
+    }
+
+    users[index] = {
+      ...users[index],
+      last_login_at: loginAt,
+      last_login_ip: loginIp,
+      last_login_user_agent: loginUserAgent,
+      token_version: Number(users[index].token_version || 1)
+    };
+
+    writeJsonArray(usersPath, users);
+    return;
+  }
+
+  await pool.query(
+    `
+      UPDATE users
+      SET last_login_at = $1, last_login_ip = $2, last_login_user_agent = $3
+      WHERE id = $4
+    `,
+    [loginAt, loginIp, loginUserAgent, userId]
+  );
+}
+
+async function updateUserContactSettings(userId, { email, phone }) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const normalizedPhone = normalizePhone(phone);
+
+  if (!normalizedEmail || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+    throw new Error("Please enter a valid email address.");
+  }
+
+  if (phone && !normalizedPhone) {
+    throw new Error("Please enter a valid phone number.");
+  }
+
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const duplicate = users.find((item) => {
+      if (item.id === userId) {
+        return false;
+      }
+
+      const sameEmail = String(item.email || "").toLowerCase() === normalizedEmail;
+      const samePhone = normalizedPhone && normalizePhone(item.phone || "") === normalizedPhone;
+      return sameEmail || samePhone;
+    });
+
+    if (duplicate) {
+      throw new Error("Email or phone is already in use by another account.");
+    }
+
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return null;
+    }
+
+    users[index] = {
+      ...users[index],
+      email: normalizedEmail,
+      phone: normalizedPhone || null
+    };
+
+    writeJsonArray(usersPath, users);
+    return users[index];
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE users
+      SET email = $1, phone = $2
+      WHERE id = $3
+      RETURNING id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+    `,
+    [normalizedEmail, normalizedPhone || null, userId]
+  );
+
+  if (!result.rows[0]) {
+    return null;
+  }
+
+  return result.rows[0];
+}
+
+async function changeUserPassword(userId, currentPassword, nextPassword) {
+  const user = await findUserById(userId);
+  if (!user) {
+    return { ok: false, reason: "missing" };
+  }
+
+  const isMatch = await bcrypt.compare(String(currentPassword || ""), user.password_hash || "");
+  if (!isMatch) {
+    return { ok: false, reason: "current" };
+  }
+
+  const next = String(nextPassword || "");
+  if (next.length < 8) {
+    return { ok: false, reason: "length" };
+  }
+
+  const hash = await bcrypt.hash(next, 12);
+
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return { ok: false, reason: "missing" };
+    }
+
+    users[index] = {
+      ...users[index],
+      password_hash: hash
+    };
+
+    writeJsonArray(usersPath, users);
+    return { ok: true };
+  }
+
+  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [hash, userId]);
+  return { ok: true };
+}
+
+async function rotateUserTokenVersion(userId) {
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return null;
+    }
+
+    const nextVersion = Number(users[index].token_version || 1) + 1;
+    users[index] = {
+      ...users[index],
+      token_version: nextVersion
+    };
+
+    writeJsonArray(usersPath, users);
+    return users[index];
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE users
+      SET token_version = token_version + 1
+      WHERE id = $1
+      RETURNING id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+    `,
+    [userId]
   );
 
   return result.rows[0] || null;
@@ -1404,7 +1630,14 @@ async function requireUser(req, res, next) {
       return res.status(401).json({ ok: false, message: "Invalid authentication token." });
     }
 
+    const tokenVersion = Number(decoded.tv || 1);
+    const userTokenVersion = Number(user.token_version || 1);
+    if (!Number.isFinite(tokenVersion) || tokenVersion !== userTokenVersion) {
+      return res.status(401).json({ ok: false, message: "Session expired. Please log in again." });
+    }
+
     req.authUser = user;
+    req.authToken = decoded;
     return next();
   } catch (_error) {
     return res.status(401).json({ ok: false, message: "Invalid authentication token." });
@@ -1626,6 +1859,8 @@ app.get("/account", (_req, res) => {
 app.post("/api/auth/register", registerLimiter, async (req, res) => {
   const username = String(req.body.username || "").trim();
   const email = String(req.body.email || "").trim().toLowerCase();
+  const phone = String(req.body.phone || "").trim();
+  const normalizedPhone = normalizePhone(phone);
   const password = String(req.body.password || "");
 
   if (!username || !email || !password) {
@@ -1644,27 +1879,40 @@ app.post("/api/auth/register", registerLimiter, async (req, res) => {
     return res.status(400).json({ ok: false, message: "Please enter a valid email address." });
   }
 
+  if (phone && !normalizedPhone) {
+    return res.status(400).json({ ok: false, message: "Please enter a valid phone number." });
+  }
+
   if (password.length < 8) {
     return res.status(400).json({ ok: false, message: "Password must be at least 8 characters." });
   }
 
   try {
-    const existing = await findUserByIdentity(username) || await findUserByIdentity(email);
+    const existing = await findUserByIdentity(username)
+      || await findUserByIdentity(email)
+      || (normalizedPhone ? await findUserByIdentity(normalizedPhone) : null);
+
     if (existing) {
-      return res.status(409).json({ ok: false, message: "An account with this username or email already exists." });
+      return res.status(409).json({ ok: false, message: "An account with this username, email, or phone already exists." });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await createUserAccount({ username, email, passwordHash });
+    const user = await createUserAccount({ username, email, phone: normalizedPhone, passwordHash });
 
     if (!user) {
       return res.status(409).json({ ok: false, message: "Unable to create account with these details." });
     }
 
     await ensureStarterProject(user.id);
+    await updateUserLoginMetadata(user.id, req);
 
-    const token = signUserToken(user);
-    return res.json({ ok: true, token, user: toPublicUser(user) });
+    const userAfterLogin = await findUserById(user.id);
+    if (!userAfterLogin) {
+      return res.status(500).json({ ok: false, message: "Unable to create account right now." });
+    }
+
+    const token = signUserToken(userAfterLogin);
+    return res.json({ ok: true, token, user: toPublicUser(userAfterLogin) });
   } catch (error) {
     console.error("Failed to register user", error);
     return res.status(500).json({ ok: false, message: "Unable to create account right now." });
@@ -1676,7 +1924,7 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
   const password = String(req.body.password || "");
 
   if (!identity || !password) {
-    return res.status(400).json({ ok: false, message: "Username/email and password are required." });
+    return res.status(400).json({ ok: false, message: "Username/email/phone and password are required." });
   }
 
   const lockRemainingMs = loginLockRemainingMs(req, identity);
@@ -1706,8 +1954,15 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
 
     clearFailedLogin(req, identity);
 
-    const token = signUserToken(user);
-    return res.json({ ok: true, token, user: toPublicUser(user) });
+    await updateUserLoginMetadata(user.id, req);
+
+    const userAfterLogin = await findUserById(user.id);
+    if (!userAfterLogin) {
+      return res.status(500).json({ ok: false, message: "Unable to login right now." });
+    }
+
+    const token = signUserToken(userAfterLogin);
+    return res.json({ ok: true, token, user: toPublicUser(userAfterLogin) });
   } catch (error) {
     console.error("Failed to login user", error);
     return res.status(500).json({ ok: false, message: "Unable to login right now." });
@@ -1725,6 +1980,99 @@ app.get("/api/user/progress", requireUser, async (req, res) => {
   } catch (error) {
     console.error("Failed to load user progress", error);
     return res.status(500).json({ ok: false, message: "Unable to load project progress right now." });
+  }
+});
+
+app.get("/api/user/settings", requireUser, async (req, res) => {
+  const tokenIssuedAt = Number(req.authToken && req.authToken.iat ? req.authToken.iat : 0);
+
+  return res.json({
+    ok: true,
+    user: toPublicUser(req.authUser),
+    security: {
+      current_session_started_at: tokenIssuedAt ? new Date(tokenIssuedAt * 1000).toISOString() : null,
+      last_login_at: req.authUser.last_login_at || null,
+      last_login_ip: req.authUser.last_login_ip || null,
+      last_login_user_agent: req.authUser.last_login_user_agent || null
+    }
+  });
+});
+
+app.patch("/api/user/settings", requireUser, async (req, res) => {
+  const email = String(req.body.email || "").trim();
+  const phone = String(req.body.phone || "").trim();
+
+  if (!email) {
+    return res.status(400).json({ ok: false, message: "Email is required." });
+  }
+
+  try {
+    const updated = await updateUserContactSettings(req.authUser.id, { email, phone });
+    if (!updated) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    return res.json({ ok: true, user: toPublicUser(updated) });
+  } catch (error) {
+    if (error && error.code === "23505") {
+      return res.status(409).json({ ok: false, message: "Email or phone is already in use by another account." });
+    }
+
+    const message = error && error.message ? error.message : "Unable to update account settings right now.";
+    if (message.includes("already in use") || message.includes("valid")) {
+      return res.status(400).json({ ok: false, message });
+    }
+
+    console.error("Failed to update account settings", error);
+    return res.status(500).json({ ok: false, message: "Unable to update account settings right now." });
+  }
+});
+
+app.post("/api/user/settings/password", requireUser, async (req, res) => {
+  const currentPassword = String(req.body.currentPassword || "");
+  const newPassword = String(req.body.newPassword || "");
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ ok: false, message: "Current password and new password are required." });
+  }
+
+  if (newPassword.length < 8) {
+    return res.status(400).json({ ok: false, message: "New password must be at least 8 characters." });
+  }
+
+  try {
+    const result = await changeUserPassword(req.authUser.id, currentPassword, newPassword);
+    if (!result.ok && result.reason === "current") {
+      return res.status(400).json({ ok: false, message: "Current password is incorrect." });
+    }
+
+    if (!result.ok && result.reason === "length") {
+      return res.status(400).json({ ok: false, message: "New password must be at least 8 characters." });
+    }
+
+    if (!result.ok) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Failed to change password", error);
+    return res.status(500).json({ ok: false, message: "Unable to change password right now." });
+  }
+});
+
+app.post("/api/user/settings/sessions/revoke-others", requireUser, async (req, res) => {
+  try {
+    const updatedUser = await rotateUserTokenVersion(req.authUser.id);
+    if (!updatedUser) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    const nextToken = signUserToken(updatedUser);
+    return res.json({ ok: true, token: nextToken, user: toPublicUser(updatedUser) });
+  } catch (error) {
+    console.error("Failed to revoke sessions", error);
+    return res.status(500).json({ ok: false, message: "Unable to revoke other sessions right now." });
   }
 });
 
