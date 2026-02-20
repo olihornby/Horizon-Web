@@ -1453,11 +1453,18 @@ const contactLimiter = rateLimit({
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: LOGIN_RATE_LIMIT_MAX,
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
-  message: {
-    ok: false,
-    message: "Too many login attempts. Please try again later."
+  handler: (req, res) => {
+    const resetTime = req.rateLimit && req.rateLimit.resetTime ? new Date(req.rateLimit.resetTime).getTime() : Date.now();
+    const retryAfterSeconds = Math.max(1, Math.ceil((resetTime - Date.now()) / 1000));
+    res.setHeader("Retry-After", String(retryAfterSeconds));
+    return res.status(429).json({
+      ok: false,
+      message: "Too many login attempts. Please try again later.",
+      retry_after_seconds: retryAfterSeconds
+    });
   }
 });
 
@@ -1674,9 +1681,12 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
 
   const lockRemainingMs = loginLockRemainingMs(req, identity);
   if (lockRemainingMs > 0) {
+    const retryAfterSeconds = Math.max(1, Math.ceil(lockRemainingMs / 1000));
+    res.setHeader("Retry-After", String(retryAfterSeconds));
     return res.status(429).json({
       ok: false,
-      message: "Too many failed login attempts. Please try again later."
+      message: "Too many failed login attempts. Please try again later.",
+      retry_after_seconds: retryAfterSeconds
     });
   }
 

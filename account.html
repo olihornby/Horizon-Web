@@ -114,6 +114,9 @@
       const status = document.getElementById("account-status");
       const loginForm = document.getElementById("login-form");
       const registerForm = document.getElementById("register-form");
+      const loginIdentityInput = document.getElementById("login-identity");
+      const loginPasswordInput = document.getElementById("login-password");
+      const loginSubmitButton = loginForm ? loginForm.querySelector("button[type='submit']") : null;
       const progressList = document.getElementById("progress-list");
       const progressSection = document.getElementById("progress-section");
       const authSection = document.getElementById("auth-section");
@@ -127,6 +130,85 @@
       const statBudget = document.getElementById("stat-budget");
 
       const auth = window.HorizonAuth;
+      let loginAbortController = null;
+      let loginInFlight = false;
+      let loginCooldownUntil = 0;
+      let loginCooldownInterval = null;
+
+      function setLoginControlsDisabled(isDisabled, buttonText) {
+        if (loginSubmitButton) {
+          loginSubmitButton.disabled = isDisabled;
+          loginSubmitButton.textContent = buttonText || "Log In";
+        }
+
+        if (loginIdentityInput) {
+          loginIdentityInput.disabled = isDisabled;
+        }
+
+        if (loginPasswordInput) {
+          loginPasswordInput.disabled = isDisabled;
+        }
+      }
+
+      function setLoginBusy(isBusy) {
+        loginInFlight = isBusy;
+        setLoginControlsDisabled(isBusy, isBusy ? "Signing in..." : "Log In");
+      }
+
+      function clearLoginCooldown() {
+        loginCooldownUntil = 0;
+        if (loginCooldownInterval) {
+          clearInterval(loginCooldownInterval);
+          loginCooldownInterval = null;
+        }
+      }
+
+      function startLoginCooldown(seconds) {
+        const safeSeconds = Math.max(1, Math.floor(Number(seconds) || 1));
+        clearLoginCooldown();
+
+        loginCooldownUntil = Date.now() + (safeSeconds * 1000);
+
+        function tickCooldown() {
+          const remaining = Math.max(0, Math.ceil((loginCooldownUntil - Date.now()) / 1000));
+
+          if (remaining <= 0) {
+            clearLoginCooldown();
+            setLoginControlsDisabled(false, "Log In");
+            setStatus("You can try logging in again.", "form-status-loading");
+            return;
+          }
+
+          setLoginControlsDisabled(true, "Try again (" + remaining + "s)");
+          setStatus("Too many attempts. Please wait " + remaining + " seconds.", "form-status-error");
+        }
+
+        tickCooldown();
+        loginCooldownInterval = setInterval(tickCooldown, 1000);
+      }
+
+      async function fetchWithTimeout(url, options, timeoutMs) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(function () {
+          controller.abort();
+        }, timeoutMs);
+
+        loginAbortController = controller;
+
+        try {
+          const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+          });
+
+          return response;
+        } finally {
+          clearTimeout(timeoutId);
+          if (loginAbortController === controller) {
+            loginAbortController = null;
+          }
+        }
+      }
 
       function setStatus(message, cls) {
         status.textContent = message;
@@ -281,27 +363,72 @@
       loginForm.addEventListener("submit", async function (event) {
         event.preventDefault();
 
-        const identity = document.getElementById("login-identity").value.trim();
-        const password = document.getElementById("login-password").value;
+        if (Date.now() < loginCooldownUntil) {
+          const remaining = Math.max(1, Math.ceil((loginCooldownUntil - Date.now()) / 1000));
+          setStatus("Too many attempts. Please wait " + remaining + " seconds.", "form-status-error");
+          return;
+        }
 
+        if (loginInFlight) {
+          if (loginAbortController) {
+            loginAbortController.abort();
+          }
+        }
+
+        const identity = loginIdentityInput.value.trim();
+        const password = loginPasswordInput.value;
+
+        if (!identity || !password) {
+          setStatus("Username/email and password are required.", "form-status-error");
+          return;
+        }
+
+        setLoginBusy(true);
         setStatus("Signing in...", "form-status-loading");
 
         try {
-          const response = await fetch("/api/auth/login", {
+          const response = await fetchWithTimeout("/api/auth/login", {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
             body: JSON.stringify({ identity, password })
+          }, 10000);
+
+          const payload = await response.json().catch(function () {
+            return { ok: false, message: "Unexpected response" };
           });
 
-          const payload = await response.json();
           if (!response.ok || !payload.ok) {
+            const retryHeader = Number(response.headers.get("retry-after") || 0);
+            const retrySeconds = Number(payload.retry_after_seconds || retryHeader || 0);
+            if (response.status === 429 && retrySeconds > 0) {
+              const lockoutError = new Error((payload.message || "Too many login attempts.") + " Try again in about " + retrySeconds + "s.");
+              lockoutError.retryAfterSeconds = retrySeconds;
+              throw lockoutError;
+            }
+
             throw new Error(payload.message || "Login failed.");
           }
 
+          clearLoginCooldown();
           auth.setSession(payload.token, payload.user);
           await loadMeAndProjects();
         } catch (error) {
-          setStatus(error.message || "Unable to login.", "form-status-error");
+          if (error && Number(error.retryAfterSeconds) > 0) {
+            startLoginCooldown(Number(error.retryAfterSeconds));
+            return;
+          }
+
+          if (error && error.name === "AbortError") {
+            setStatus("Previous login attempt canceled. Please try once with correct credentials.", "form-status-loading");
+          } else {
+            setStatus(error.message || "Unable to login.", "form-status-error");
+          }
+        } finally {
+          if (Date.now() < loginCooldownUntil) {
+            return;
+          }
+
+          setLoginBusy(false);
         }
       });
 
