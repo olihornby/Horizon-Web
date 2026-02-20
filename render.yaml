@@ -21,6 +21,12 @@ services:
           property: connectionString
       - key: ADMIN_KEY
         generateValue: true
+      - key: ADMIN_BOOTSTRAP_USERNAME
+        value: admin
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        generateValue: true
+      - key: ADMIN_JWT_SECRET
+        generateValue: true
       - key: TRUST_PROXY
         value: 1
       - key: BACKLOG_FLUSH_CRON

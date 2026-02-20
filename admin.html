@@ -41,12 +41,18 @@
     <section class="section">
       <div class="container">
         <h3>Inquiry Admin</h3>
-        <p>Use your admin key to view, filter, edit, export, and manage submissions.</p>
+        <p>Use your admin key plus admin username/password to view, filter, edit, export, and manage submissions.</p>
 
         <form id="admin-form" class="admin-auth" autocomplete="off">
           <label for="admin-key">Admin Key</label>
           <input id="admin-key" name="admin-key" type="password" required />
-          <button class="btn btn-submit" type="submit">Load Inquiries</button>
+          <label for="admin-master-key">Admin Master Key (owner only)</label>
+          <input id="admin-master-key" name="admin-master-key" type="password" autocomplete="off" />
+          <label for="admin-username">Admin Username</label>
+          <input id="admin-username" name="admin-username" type="text" autocomplete="username" required />
+          <label for="admin-password">Admin Password</label>
+          <input id="admin-password" name="admin-password" type="password" autocomplete="current-password" required />
+          <button class="btn btn-submit" type="submit">Admin Login + Load</button>
           <button class="btn btn-submit" type="button" id="export-csv">Export CSV</button>
         </form>
 
@@ -74,6 +80,58 @@
 
         <section class="card admin-panel" id="client-progress-panel">
           <h4>Update Client Project Progress</h4>
+          <div class="admin-filter-actions" style="margin-bottom: 1rem;">
+            <a class="btn btn-submit" href="admin-employee.html">View My Employee Info</a>
+          </div>
+
+          <form id="create-admin-form" class="admin-filters" autocomplete="off" style="margin-bottom: 1rem;">
+            <label for="new-admin-username">New Admin Username</label>
+            <input id="new-admin-username" type="text" placeholder="admin.username" required />
+
+            <label for="new-admin-password">New Admin Password</label>
+            <input id="new-admin-password" type="password" minlength="10" required />
+
+            <label for="new-admin-email">New Admin Email (optional)</label>
+            <input id="new-admin-email" type="email" placeholder="admin@example.com" />
+
+            <label for="new-admin-phone">New Admin Phone (optional)</label>
+            <input id="new-admin-phone" type="text" placeholder="+15551234567" />
+
+            <label for="new-admin-bank">New Admin Bank Details (optional)</label>
+            <input id="new-admin-bank" type="text" placeholder="Account/routing details" />
+
+            <div class="admin-filter-actions">
+              <button class="btn btn-submit" type="submit">Create Admin Account</button>
+            </div>
+          </form>
+
+          <section class="card admin-panel" id="admin-users-panel" style="margin-bottom: 1rem;">
+            <h4>Admin Account Management</h4>
+            <p id="admin-users-status">Sign in to load admin accounts.</p>
+            <div class="admin-filter-actions" style="margin-bottom: 0.75rem;">
+              <button class="btn btn-submit" type="button" id="refresh-admin-users">Refresh Admin Accounts</button>
+            </div>
+            <div class="table-wrap">
+              <table class="inquiry-table">
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Bank Details</th>
+                    <th>Last Login</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-users-body">
+                  <tr>
+                    <td colspan="6">No admin data loaded.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <form id="progress-form" class="admin-filters" autocomplete="off">
             <label for="progress-identity">Client Username or Email</label>
             <input id="progress-identity" type="text" placeholder="username or email" required />
@@ -107,8 +165,10 @@
           <div class="api-snippet-wrap">
             <p class="api-snippet-title">API Example (cURL)</p>
             <pre id="progress-api-snippet" class="api-snippet">curl -X POST "https://your-service-name.onrender.com/api/admin/user-progress" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -H "x-admin-key: YOUR_ADMIN_KEY" \
+  -H "x-admin-master-key: YOUR_ADMIN_MASTER_KEY" \
   -d '{"identity":"client@example.com","projectName":"Project Alpha","status":"In Development","percentComplete":45,"deadlineDate":"2026-04-30","budgetTotal":25000,"budgetUsed":9800,"summary":"Core features delivered and in internal QA."}'</pre>
             <button class="btn btn-submit" type="button" id="copy-progress-api">Copy cURL</button>
           </div>
@@ -203,6 +263,9 @@
     (function () {
       const form = document.getElementById("admin-form");
       const keyInput = document.getElementById("admin-key");
+      const masterKeyInput = document.getElementById("admin-master-key");
+      const usernameInput = document.getElementById("admin-username");
+      const passwordInput = document.getElementById("admin-password");
       const status = document.getElementById("admin-status");
       const tbody = document.getElementById("inquiry-body");
       const exportButton = document.getElementById("export-csv");
@@ -217,6 +280,15 @@
       const filterFrom = document.getElementById("filter-from");
       const filterTo = document.getElementById("filter-to");
       const resetFiltersButton = document.getElementById("reset-filters");
+      const createAdminForm = document.getElementById("create-admin-form");
+      const newAdminUsername = document.getElementById("new-admin-username");
+      const newAdminPassword = document.getElementById("new-admin-password");
+      const newAdminEmail = document.getElementById("new-admin-email");
+      const newAdminPhone = document.getElementById("new-admin-phone");
+      const newAdminBank = document.getElementById("new-admin-bank");
+      const adminUsersBody = document.getElementById("admin-users-body");
+      const adminUsersStatus = document.getElementById("admin-users-status");
+      const refreshAdminUsersButton = document.getElementById("refresh-admin-users");
       const progressForm = document.getElementById("progress-form");
       const progressIdentity = document.getElementById("progress-identity");
       const progressProject = document.getElementById("progress-project");
@@ -245,6 +317,9 @@
 
       const state = {
         key: "",
+        masterKey: "",
+        adminToken: "",
+        adminUsername: "",
         page: 1,
         pageSize: 25,
         totalPages: 1,
@@ -260,6 +335,10 @@
 
       const countKey = "horizonHomeTapCount";
       const visibleKey = "horizonAdminMenuVisible";
+
+      keyInput.value = sessionStorage.getItem("horizonAdminKey") || "";
+      masterKeyInput.value = sessionStorage.getItem("horizonAdminMasterKey") || "";
+      usernameInput.value = sessionStorage.getItem("horizonAdminUsername") || "";
 
       function showAdminNavLink() {
         if (adminNavLink) {
@@ -342,7 +421,7 @@
           .map(function (row) {
             const date = new Date(row.created_at).toLocaleString();
             const attachment = row.attachment_original_name
-              ? "<a href='/api/inquiries/" + row.id + "/attachment?key=" + encodeURIComponent(state.key) + "'>" + escapeHtml(row.attachment_original_name) + "</a>"
+              ? "<button class='btn btn-submit btn-mini' type='button' data-action='attachment' data-id='" + row.id + "' data-file-name='" + escapeHtml(row.attachment_original_name) + "'>Download</button>"
               : "-";
 
             return "<tr data-id='" + row.id + "'>" +
@@ -370,11 +449,75 @@
         nextPageButton.disabled = state.page >= state.totalPages;
       }
 
+      function renderAdminUsers(items) {
+        if (!adminUsersBody) {
+          return;
+        }
+
+        if (!items || !items.length) {
+          adminUsersBody.innerHTML = "<tr><td colspan='6'>No admin accounts found.</td></tr>";
+          return;
+        }
+
+        adminUsersBody.innerHTML = items
+          .map(function (admin) {
+            const isCurrent = String(admin.username || "").toLowerCase() === String(state.adminUsername || "").toLowerCase();
+            const lastLogin = admin.last_login_at ? new Date(admin.last_login_at).toLocaleString() : "-";
+            const deleteDisabled = isCurrent ? " disabled" : "";
+            const resetDisabled = isCurrent ? " disabled" : "";
+
+            return "<tr data-admin-id='" + escapeHtml(String(admin.id)) + "'>" +
+              "<td>" + escapeHtml(admin.username || "-") + (isCurrent ? " <strong>(you)</strong>" : "") + "</td>" +
+              "<td>" + escapeHtml(admin.email || "-") + "</td>" +
+              "<td>" + escapeHtml(admin.phone || "-") + "</td>" +
+              "<td>" + escapeHtml(admin.bank_details || "-") + "</td>" +
+              "<td>" + escapeHtml(lastLogin) + "</td>" +
+              "<td class='row-actions'>" +
+                "<button class='btn btn-submit btn-mini' type='button' data-admin-action='edit' data-admin-id='" + escapeHtml(String(admin.id)) + "'>Edit</button>" +
+                "<button class='btn btn-submit btn-mini' type='button' data-admin-action='reset-password' data-admin-id='" + escapeHtml(String(admin.id)) + "'" + resetDisabled + ">Reset Password</button>" +
+                "<button class='btn btn-submit btn-mini' type='button' data-admin-action='delete' data-admin-id='" + escapeHtml(String(admin.id)) + "'" + deleteDisabled + ">Delete</button>" +
+              "</td>" +
+            "</tr>";
+          })
+          .join("");
+      }
+
+      async function loadAdminUsers() {
+        if (!state.key || !state.adminToken) {
+          if (adminUsersStatus) {
+            adminUsersStatus.textContent = "Sign in to load admin accounts.";
+          }
+          return;
+        }
+
+        try {
+          const payload = await fetchJson("/api/admin/admin-users");
+          const admins = payload.admins || [];
+          renderAdminUsers(admins);
+
+          if (adminUsersStatus) {
+            adminUsersStatus.textContent = "Loaded " + String(admins.length) + " admin account(s).";
+          }
+        } catch (error) {
+          if (adminUsersStatus) {
+            adminUsersStatus.textContent = error.message || "Unable to load admin accounts.";
+          }
+        }
+      }
+
       async function fetchJson(url, options) {
         const finalOptions = options || {};
         finalOptions.headers = Object.assign({}, finalOptions.headers || {}, {
           "x-admin-key": state.key
         });
+
+        if (state.adminToken) {
+          finalOptions.headers.Authorization = "Bearer " + state.adminToken;
+        }
+
+        if (state.masterKey) {
+          finalOptions.headers["x-admin-master-key"] = state.masterKey;
+        }
 
         const response = await fetch(url, finalOptions);
         const payload = await response.json().catch(function () {
@@ -451,7 +594,7 @@
       }
 
       async function loadBacklogStatus() {
-        if (!state.key) {
+        if (!state.key || !state.adminToken) {
           backlogText.textContent = "Load inquiries to view backlog status.";
           return;
         }
@@ -471,28 +614,70 @@
 
       async function refreshAll() {
         await loadInquiries();
-        await Promise.all([loadAnalytics(), loadAudit(), loadMonitoring(), loadBacklogStatus()]);
+        await Promise.all([loadAnalytics(), loadAudit(), loadMonitoring(), loadBacklogStatus(), loadAdminUsers()]);
       }
 
       form.addEventListener("submit", async function (event) {
         event.preventDefault();
 
         const key = keyInput.value.trim();
-        if (!key) {
-          setStatus("Please provide an admin key.", "form-status-error");
+        const masterKey = masterKeyInput.value.trim();
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+
+        if (!key || !username || !password) {
+          setStatus("Please provide admin key, username, and password.", "form-status-error");
           return;
         }
 
-        state.key = key;
-        state.page = 1;
-        await refreshAll();
+        setStatus("Signing in admin...", "form-status-loading");
+
+        try {
+          const response = await fetch("/api/admin/auth/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-admin-key": key
+            },
+            body: JSON.stringify({ username: username, password: password })
+          });
+
+          const payload = await response.json().catch(function () {
+            return { ok: false, message: "Unexpected response" };
+          });
+
+          if (!response.ok || !payload.ok || !payload.token) {
+            throw new Error((payload && payload.message) || "Unable to login admin.");
+          }
+
+          state.key = key;
+          state.masterKey = masterKey;
+          state.adminToken = payload.token;
+          state.adminUsername = username;
+          sessionStorage.setItem("horizonAdminKey", state.key);
+          sessionStorage.setItem("horizonAdminMasterKey", state.masterKey);
+          sessionStorage.setItem("horizonAdminUsername", state.adminUsername);
+          sessionStorage.setItem("horizonAdminToken", state.adminToken);
+          state.page = 1;
+          await refreshAll();
+        } catch (error) {
+          state.key = "";
+          state.masterKey = "";
+          state.adminToken = "";
+          state.adminUsername = "";
+          sessionStorage.removeItem("horizonAdminKey");
+          sessionStorage.removeItem("horizonAdminMasterKey");
+          sessionStorage.removeItem("horizonAdminUsername");
+          sessionStorage.removeItem("horizonAdminToken");
+          setStatus(error.message || "Unable to login admin.", "form-status-error");
+        }
       });
 
       filterForm.addEventListener("submit", async function (event) {
         event.preventDefault();
 
-        if (!state.key) {
-          setStatus("Load inquiries first with your admin key.", "form-status-error");
+        if (!state.key || !state.adminToken) {
+          setStatus("Sign in with admin credentials first.", "form-status-error");
           return;
         }
 
@@ -525,7 +710,7 @@
         };
         state.page = 1;
 
-        if (state.key) {
+        if (state.key && state.adminToken) {
           await loadInquiries();
         }
       });
@@ -534,8 +719,13 @@
         progressForm.addEventListener("submit", async function (event) {
           event.preventDefault();
 
-          if (!state.key) {
-            setStatus("Load inquiries first with your admin key.", "form-status-error");
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials first.", "form-status-error");
+            return;
+          }
+
+          if (!state.masterKey) {
+            setStatus("Admin master key is required for employee account updates.", "form-status-error");
             return;
           }
 
@@ -581,6 +771,201 @@
         });
       }
 
+      if (createAdminForm) {
+        createAdminForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials first.", "form-status-error");
+            return;
+          }
+
+          if (!state.masterKey) {
+            setStatus("Admin master key is required for creating admin accounts.", "form-status-error");
+            return;
+          }
+
+          const username = newAdminUsername.value.trim();
+          const password = newAdminPassword.value;
+          const email = newAdminEmail.value.trim();
+          const phone = newAdminPhone.value.trim();
+          const bankDetails = newAdminBank.value.trim();
+
+          if (!username || !password) {
+            setStatus("New admin username and password are required.", "form-status-error");
+            return;
+          }
+
+          try {
+            await fetchJson("/api/admin/admin-users", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                username,
+                password,
+                email,
+                phone,
+                bankDetails
+              })
+            });
+
+            setStatus("New admin account created.", "form-status-success");
+            createAdminForm.reset();
+            await Promise.all([loadAudit(), loadAdminUsers()]);
+          } catch (error) {
+            setStatus(error.message || "Unable to create admin account.", "form-status-error");
+          }
+        });
+      }
+
+      if (refreshAdminUsersButton) {
+        refreshAdminUsersButton.addEventListener("click", async function () {
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials first.", "form-status-error");
+            return;
+          }
+
+          await loadAdminUsers();
+        });
+      }
+
+      if (adminUsersBody) {
+        adminUsersBody.addEventListener("click", async function (event) {
+          const button = event.target.closest("button[data-admin-action]");
+          if (!button) {
+            return;
+          }
+
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials first.", "form-status-error");
+            return;
+          }
+
+          const action = button.getAttribute("data-admin-action");
+          const id = button.getAttribute("data-admin-id");
+          const row = button.closest("tr");
+          const cells = row ? row.querySelectorAll("td") : [];
+          const usernameText = cells[0] ? cells[0].textContent.replace("(you)", "").trim() : "admin";
+          const emailText = cells[1] ? cells[1].textContent.trim() : "";
+          const phoneText = cells[2] ? cells[2].textContent.trim() : "";
+          const bankText = cells[3] ? cells[3].textContent.trim() : "";
+
+          if (action === "reset-password") {
+            if (!state.masterKey) {
+              setStatus("Admin master key is required to reset another admin password.", "form-status-error");
+              return;
+            }
+
+            const entered = window.prompt("Enter a new password for '" + usernameText + "' (min 10 chars)", "");
+            if (entered === null) {
+              return;
+            }
+
+            const nextPassword = entered.trim();
+            if (nextPassword.length < 10) {
+              setStatus("Admin password must be at least 10 characters.", "form-status-error");
+              return;
+            }
+
+            const confirmed = window.confirm("Reset password for '" + usernameText + "' now?");
+            if (!confirmed) {
+              return;
+            }
+
+            try {
+              await fetchJson("/api/admin/admin-users/" + encodeURIComponent(id), {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: nextPassword })
+              });
+
+              setStatus("Password reset for " + usernameText + ".", "form-status-success");
+              await Promise.all([loadAdminUsers(), loadAudit()]);
+            } catch (error) {
+              setStatus(error.message || "Unable to reset admin password.", "form-status-error");
+            }
+
+            return;
+          }
+
+          if (action === "edit") {
+            const isCurrent = String(usernameText || "").toLowerCase() === String(state.adminUsername || "").toLowerCase();
+            if (!isCurrent && !state.masterKey) {
+              setStatus("Admin master key is required to edit other admin accounts.", "form-status-error");
+              return;
+            }
+
+            const nextEmailRaw = window.prompt("Email (optional)", emailText === "-" ? "" : emailText);
+            if (nextEmailRaw === null) {
+              return;
+            }
+
+            const nextPhoneRaw = window.prompt("Phone (optional)", phoneText === "-" ? "" : phoneText);
+            if (nextPhoneRaw === null) {
+              return;
+            }
+
+            const nextBankRaw = window.prompt("Bank details (optional)", bankText === "-" ? "" : bankText);
+            if (nextBankRaw === null) {
+              return;
+            }
+
+            const rotatePassword = window.confirm("Rotate password for this admin now?");
+            let nextPassword = "";
+            if (rotatePassword) {
+              const entered = window.prompt("New password (min 10 chars)", "");
+              if (entered === null) {
+                return;
+              }
+              nextPassword = entered;
+            }
+
+            try {
+              await fetchJson("/api/admin/admin-users/" + encodeURIComponent(id), {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  email: nextEmailRaw.trim(),
+                  phone: nextPhoneRaw.trim(),
+                  bankDetails: nextBankRaw.trim(),
+                  password: nextPassword
+                })
+              });
+
+              setStatus("Admin account updated for " + usernameText + ".", "form-status-success");
+              await Promise.all([loadAdminUsers(), loadAudit()]);
+            } catch (error) {
+              setStatus(error.message || "Unable to update admin account.", "form-status-error");
+            }
+
+            return;
+          }
+
+          if (action === "delete") {
+            if (!state.masterKey) {
+              setStatus("Admin master key is required to delete admin accounts.", "form-status-error");
+              return;
+            }
+
+            const confirmed = window.confirm("Delete admin account '" + usernameText + "'? This cannot be undone.");
+            if (!confirmed) {
+              return;
+            }
+
+            try {
+              await fetchJson("/api/admin/admin-users/" + encodeURIComponent(id), {
+                method: "DELETE"
+              });
+
+              setStatus("Admin account deleted for " + usernameText + ".", "form-status-success");
+              await Promise.all([loadAdminUsers(), loadAudit()]);
+            } catch (error) {
+              setStatus(error.message || "Unable to delete admin account.", "form-status-error");
+            }
+          }
+        });
+      }
+
       if (copyProgressApiButton && progressApiSnippet) {
         copyProgressApiButton.addEventListener("click", async function () {
           const text = progressApiSnippet.textContent || "";
@@ -596,8 +981,13 @@
 
       if (resetAccountsButton) {
         resetAccountsButton.addEventListener("click", async function () {
-          if (!state.key) {
-            setStatus("Load inquiries first with your admin key.", "form-status-error");
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials first.", "form-status-error");
+            return;
+          }
+
+          if (!state.masterKey) {
+            setStatus("Admin master key is required to reset employee accounts.", "form-status-error");
             return;
           }
 
@@ -620,8 +1010,8 @@
 
       if (flushBacklogButton) {
         flushBacklogButton.addEventListener("click", async function () {
-          if (!state.key) {
-            setStatus("Load inquiries first with your admin key.", "form-status-error");
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials first.", "form-status-error");
             return;
           }
 
@@ -654,7 +1044,7 @@
       }
 
       prevPageButton.addEventListener("click", async function () {
-        if (state.page <= 1 || !state.key) {
+        if (state.page <= 1 || !state.key || !state.adminToken) {
           return;
         }
 
@@ -663,7 +1053,7 @@
       });
 
       nextPageButton.addEventListener("click", async function () {
-        if (!state.key || state.page >= state.totalPages) {
+        if (!state.key || !state.adminToken || state.page >= state.totalPages) {
           return;
         }
 
@@ -702,6 +1092,38 @@
         const action = button.getAttribute("data-action");
         const id = button.getAttribute("data-id");
         const row = button.closest("tr");
+
+        if (action === "attachment") {
+          const fileName = button.getAttribute("data-file-name") || "attachment";
+
+          try {
+            const response = await fetch("/api/inquiries/" + encodeURIComponent(id) + "/attachment", {
+              headers: {
+                "x-admin-key": state.key,
+                Authorization: "Bearer " + state.adminToken
+              }
+            });
+
+            if (!response.ok) {
+              throw new Error("Unable to download attachment.");
+            }
+
+            const blob = await response.blob();
+            const tempUrl = URL.createObjectURL(blob);
+            const downloadLink = document.createElement("a");
+            downloadLink.href = tempUrl;
+            downloadLink.download = fileName;
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            downloadLink.remove();
+            URL.revokeObjectURL(tempUrl);
+            setStatus("Attachment downloaded.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to download attachment.", "form-status-error");
+          }
+
+          return;
+        }
 
         if (action === "delete") {
           const confirmed = window.confirm("Delete inquiry #" + id + "?");
@@ -780,30 +1202,20 @@
 
       if (exportButton) {
         exportButton.addEventListener("click", async function () {
-          let key = keyInput.value.trim();
-
-          if (!key) {
-            key = window.prompt("Enter admin key to export inquiries:", "") || "";
-            key = key.trim();
-
-            if (key) {
-              keyInput.value = key;
-            }
-          }
-
-          if (!key) {
-            setStatus("Admin key is required before export.", "form-status-error");
+          if (!state.key || !state.adminToken) {
+            setStatus("Sign in with admin credentials before export.", "form-status-error");
             return;
           }
 
-          state.key = key;
           exportButton.disabled = true;
           setStatus("Preparing CSV export...", "form-status-loading");
 
           try {
-            const response = await fetch("/api/inquiries.csv?key=" + encodeURIComponent(key), {
+            const response = await fetch("/api/inquiries.csv", {
               headers: {
-                Accept: "text/csv"
+                Accept: "text/csv",
+                "x-admin-key": state.key,
+                Authorization: "Bearer " + state.adminToken
               }
             });
 

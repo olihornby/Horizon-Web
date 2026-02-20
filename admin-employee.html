@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Employee Info | Horizon</title>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("horizon-theme");
+        var theme = (stored === "light" || stored === "dark")
+          ? stored
+          : ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (_error) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2" />
+  <script src="theme.js" defer></script>
+  <script src="auth.js" defer></script>
+  <script src="menu.js" defer></script>
+  <script src="accessibility.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container nav">
+      <h1 class="logo"><a class="logo-link" href="index.html">Horizon <span class="logo-home">Home</span></a></h1>
+      <nav>
+        <a href="about.html">About</a>
+        <a href="services.html">Services</a>
+        <a href="contact.html">Contact</a>
+        <a href="account.html">Account</a>
+        <a href="admin.html" data-admin-link hidden>Admin</a>
+        <button class="theme-toggle" type="button" data-theme-toggle>Light mode</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container">
+        <h3>Admin Employee Info</h3>
+        <p>Enter your admin key, username, and password to view your employee profile details.</p>
+
+        <form id="employee-auth-form" class="admin-auth" autocomplete="off">
+          <label for="employee-admin-key">Admin Key</label>
+          <input id="employee-admin-key" type="password" required />
+
+          <label for="employee-admin-username">Admin Username</label>
+          <input id="employee-admin-username" type="text" autocomplete="username" required />
+
+          <label for="employee-admin-password">Admin Password</label>
+          <input id="employee-admin-password" type="password" autocomplete="current-password" required />
+
+          <button class="btn btn-submit" type="submit">Verify and View Info</button>
+        </form>
+
+        <p id="employee-auth-status" class="form-status" aria-live="polite"></p>
+
+        <section id="employee-info-card" class="card admin-panel" hidden>
+          <h4>Your Employee Details</h4>
+          <ul id="employee-info-list" class="audit-list"></ul>
+          <p><a class="btn btn-submit" href="admin.html">Back to Admin Dashboard</a></p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>© 2026 Horizon. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const form = document.getElementById("employee-auth-form");
+      const keyInput = document.getElementById("employee-admin-key");
+      const usernameInput = document.getElementById("employee-admin-username");
+      const passwordInput = document.getElementById("employee-admin-password");
+      const status = document.getElementById("employee-auth-status");
+      const infoCard = document.getElementById("employee-info-card");
+      const infoList = document.getElementById("employee-info-list");
+
+      const homeLink = document.querySelector(".logo-link");
+      const adminNavLink = document.querySelector("[data-admin-link]");
+      const countKey = "horizonHomeTapCount";
+      const visibleKey = "horizonAdminMenuVisible";
+
+      function showAdminNavLink() {
+        if (adminNavLink) {
+          adminNavLink.hidden = false;
+        }
+      }
+
+      if (sessionStorage.getItem(visibleKey) === "1") {
+        showAdminNavLink();
+      }
+
+      if (homeLink) {
+        homeLink.addEventListener("click", function (event) {
+          if (sessionStorage.getItem(visibleKey) === "1") {
+            return;
+          }
+
+          const currentCount = Number(sessionStorage.getItem(countKey) || "0") + 1;
+
+          if (currentCount >= 5) {
+            event.preventDefault();
+            sessionStorage.setItem(countKey, "0");
+            sessionStorage.setItem(visibleKey, "1");
+            showAdminNavLink();
+            return;
+          }
+
+          sessionStorage.setItem(countKey, String(currentCount));
+        });
+      }
+
+      function setStatus(text, type) {
+        status.textContent = text;
+        status.className = "form-status " + (type || "");
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      function renderEmployee(employee) {
+        const rows = [
+          ["Username", employee.username || "-"],
+          ["Email", employee.email || "-"],
+          ["Phone", employee.phone || "-"],
+          ["Bank Details", employee.bank_details || "-"],
+          ["Password", employee.password_note || "Stored securely"],
+          ["Created", employee.created_at ? new Date(employee.created_at).toLocaleString() : "-"],
+          ["Last Login", employee.last_login_at ? new Date(employee.last_login_at).toLocaleString() : "-"]
+        ];
+
+        infoList.innerHTML = rows
+          .map(function (pair) {
+            return "<li><strong>" + escapeHtml(pair[0]) + ":</strong> " + escapeHtml(pair[1]) + "</li>";
+          })
+          .join("");
+      }
+
+      async function loadEmployeeInfo(key, token) {
+        const response = await fetch("/api/admin/employee/me", {
+          headers: {
+            "x-admin-key": key,
+            Authorization: "Bearer " + token,
+            Accept: "application/json"
+          }
+        });
+
+        const payload = await response.json().catch(function () {
+          return { ok: false, message: "Unexpected response" };
+        });
+
+        if (!response.ok || !payload.ok || !payload.employee) {
+          throw new Error((payload && payload.message) || "Unable to load employee info.");
+        }
+
+        return payload.employee;
+      }
+
+      form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+
+        const key = keyInput.value.trim();
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+
+        if (!key || !username || !password) {
+          setStatus("Please fill in admin key, username, and password.", "form-status-error");
+          return;
+        }
+
+        setStatus("Verifying admin credentials...", "form-status-loading");
+
+        try {
+          const loginResponse = await fetch("/api/admin/auth/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-admin-key": key
+            },
+            body: JSON.stringify({ username: username, password: password })
+          });
+
+          const loginPayload = await loginResponse.json().catch(function () {
+            return { ok: false, message: "Unexpected response" };
+          });
+
+          if (!loginResponse.ok || !loginPayload.ok || !loginPayload.token) {
+            throw new Error((loginPayload && loginPayload.message) || "Invalid admin credentials.");
+          }
+
+          const employee = await loadEmployeeInfo(key, loginPayload.token);
+          renderEmployee(employee);
+          infoCard.hidden = false;
+
+          sessionStorage.setItem("horizonAdminKey", key);
+          sessionStorage.setItem("horizonAdminUsername", username);
+          sessionStorage.setItem("horizonAdminToken", loginPayload.token);
+
+          setStatus("Employee profile loaded.", "form-status-success");
+        } catch (error) {
+          infoCard.hidden = true;
+          setStatus(error.message || "Unable to verify admin credentials.", "form-status-error");
+        }
+      });
+
+      keyInput.value = sessionStorage.getItem("horizonAdminKey") || "";
+      usernameInput.value = sessionStorage.getItem("horizonAdminUsername") || "";
+    })();
+  </script>
+</body>
+</html>

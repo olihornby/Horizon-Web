@@ -7,9 +7,11 @@ This project is a static website plus an Express backend for contact form submis
 1. Install dependencies:
    `npm install`
 
-2. Set an admin key (required for `/admin.html` to load inquiries):
+2. Set admin authentication secrets (required for `/admin.html`):
    - PowerShell:
      `$env:ADMIN_KEY="replace-with-a-strong-secret"`
+       `$env:ADMIN_BOOTSTRAP_USERNAME="admin"`
+       `$env:ADMIN_BOOTSTRAP_PASSWORD="replace-with-a-strong-admin-password"`
 
 3. Start the app:
    `npm start`
@@ -29,7 +31,11 @@ so inquiries persist across deploys/pushes.
 2. Create a Render account and connect GitHub.
 3. Click **New +** -> **Blueprint**.
 4. Select your repo; Render will detect `render.yaml` and create the web service.
-5. In Render service settings, set `ADMIN_KEY` to a strong secret (or keep generated value and copy it for admin use).
+5. In Render service settings, configure:
+   - `ADMIN_KEY` (shared secret)
+   - `ADMIN_BOOTSTRAP_USERNAME` (initial admin username)
+   - `ADMIN_BOOTSTRAP_PASSWORD` (initial admin password)
+   - `ADMIN_JWT_SECRET` (token signing secret for admin sessions)
 6. Deploy. You will get a public URL like:
    `https://your-service-name.onrender.com`
 
@@ -38,7 +44,7 @@ Use these URLs after deploy:
 - Contact form: `https://your-service-name.onrender.com/contact.html`
 - Account portal: `https://your-service-name.onrender.com/account.html`
 - Admin viewer: `https://your-service-name.onrender.com/admin.html`
-- CSV export: `https://your-service-name.onrender.com/api/inquiries.csv?key=YOUR_ADMIN_KEY`
+- Admin employee info page: `https://your-service-name.onrender.com/admin-employee.html`
 - Monitoring details: `https://your-service-name.onrender.com/health/details`
 
 ## Important notes
@@ -63,8 +69,8 @@ As long as the service still uses the same database, your inquiry history stays 
 
 ## Export inquiries outside the table view
 
-- Open the admin page and click **Export CSV**.
-- You will be prompted for your admin key first (if it is not already entered).
+- Open the admin page and sign in with **admin key + admin username + admin password**.
+- Click **Export CSV** after authentication.
 - In supported browsers, a save dialog appears so you can choose where to save the file.
 - In browsers without file-picker support, the CSV downloads using the browser's default download behavior.
 
@@ -96,10 +102,29 @@ Important:
 - Attachment download links in the admin table
 - Analytics summary cards and activity audit feed
 - Backlog status + manual backlog flush controls in the admin page
+- Per-admin login (username/password) in addition to `ADMIN_KEY`
+- Admin employee info page (`/admin-employee.html`) requiring credential re-authentication
+- Admin creation API to provision additional admin usernames/passwords
 
-Backlog admin APIs (admin key required):
+Backlog admin APIs (admin key + admin auth token required):
 - `GET /api/admin/inquiries/backlog`
 - `POST /api/admin/inquiries/backlog/flush` (optional JSON body: `{ "limit": 100 }`)
+
+Admin auth and profile APIs:
+- `POST /api/admin/auth/login` (requires `x-admin-key` + `username` + `password`)
+- `GET /api/admin/auth/me`
+- `GET /api/admin/employee/me`
+- `POST /api/admin/admin-users` (create additional admin accounts)
+- `GET /api/admin/admin-users` (list admin accounts)
+- `PATCH /api/admin/admin-users/:id` (update admin email/phone/bank details and optionally rotate password)
+- `DELETE /api/admin/admin-users/:id` (delete admin account; cannot delete current in-use admin)
+
+Admin master-key protected account-modification APIs (`x-admin-master-key` required):
+- `POST /api/admin/admin-users`
+- `PATCH /api/admin/admin-users/:id` (required when modifying another admin)
+- `DELETE /api/admin/admin-users/:id`
+- `POST /api/admin/user-progress`
+- `POST /api/admin/users/reset`
 
 ## Client portal features
 
@@ -112,8 +137,8 @@ Backlog admin APIs (admin key required):
 - Left-side slide-out menu with hamburger button and logout action
 - Side-menu **Settings** area for accessibility controls and logout
 - Account settings in portal: profile (email/phone), password change, and "log out other sessions"
-- Admin progress update API: `POST /api/admin/user-progress` (requires admin key)
-- Admin account reset API: `POST /api/admin/users/reset` (requires admin key; clears all client accounts/progress)
+- Admin progress update API: `POST /api/admin/user-progress` (requires admin key + admin auth token)
+- Admin account reset API: `POST /api/admin/users/reset` (requires admin key + admin auth token; clears all client accounts/progress)
 
 Account settings APIs (authenticated user):
 - `GET /api/user/settings`
@@ -149,6 +174,14 @@ Set these in your deployment platform to enable email notifications and monitori
 - `BACKUP_CRON` (optional cron override for backup frequency; default is `*/15 * * * *`)
 - `BACKLOG_FLUSH_CRON` (optional cron override for queued inquiry retry frequency; default is `*/2 * * * *`)
 - `AUTH_JWT_SECRET` (recommended in production for account session token signing)
+- `ADMIN_JWT_SECRET` (recommended in production for admin session token signing)
+- `ADMIN_MASTER_KEY` (required to modify other admin/employee accounts)
+- `ADMIN_BOOTSTRAP_USERNAME` (optional, default `admin`; used to auto-create first admin)
+- `ADMIN_BOOTSTRAP_PASSWORD` (required for bootstrap admin creation)
+- `ADMIN_BOOTSTRAP_EMAIL` (optional bootstrap admin email)
+- `ADMIN_BOOTSTRAP_PHONE` (optional bootstrap admin phone)
+- `ADMIN_BOOTSTRAP_BANK_DETAILS` (optional bootstrap admin bank details)
+- `ADMIN_SESSION_HOURS` (optional, default `12`; admin token lifetime)
 - `TRUST_PROXY` (recommended for reverse-proxy hosts; set `1` on Render so rate limits use real client IPs)
 - `ENABLE_SECURITY_HEADERS` (optional, default `true`; enables CSP and hardening headers)
 - `SECURITY_HSTS_ENABLED` (optional, default `true` on Render, else `false`; sends HSTS on HTTPS requests)

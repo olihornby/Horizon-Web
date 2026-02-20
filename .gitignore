@@ -4,6 +4,7 @@ inquiries.json
 audit-log.json
 inquiry-backlog.json
 users.json
+admin-users.json
 user-progress.json
 backups/
 uploads/

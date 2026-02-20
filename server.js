@@ -13,11 +13,19 @@ const { Pool } = require("pg");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
+const ADMIN_MASTER_KEY = process.env.ADMIN_MASTER_KEY;
 const DATABASE_URL = process.env.DATABASE_URL;
 const TRUST_PROXY = process.env.TRUST_PROXY;
 const BACKUP_CRON = process.env.BACKUP_CRON || "*/15 * * * *";
 const BACKLOG_FLUSH_CRON = process.env.BACKLOG_FLUSH_CRON || "*/2 * * * *";
 const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || ADMIN_KEY || "change-this-auth-secret";
+const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || AUTH_JWT_SECRET;
+const ADMIN_SESSION_HOURS = Math.max(1, Number(process.env.ADMIN_SESSION_HOURS || 12));
+const ADMIN_BOOTSTRAP_USERNAME = String(process.env.ADMIN_BOOTSTRAP_USERNAME || process.env.ADMIN_USERNAME || "admin").trim();
+const ADMIN_BOOTSTRAP_PASSWORD = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || process.env.ADMIN_PASSWORD || "");
+const ADMIN_BOOTSTRAP_EMAIL = String(process.env.ADMIN_BOOTSTRAP_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+const ADMIN_BOOTSTRAP_PHONE = String(process.env.ADMIN_BOOTSTRAP_PHONE || process.env.ADMIN_PHONE || "").trim();
+const ADMIN_BOOTSTRAP_BANK_DETAILS = String(process.env.ADMIN_BOOTSTRAP_BANK_DETAILS || process.env.ADMIN_BANK_DETAILS || "").trim();
 const usePostgres = Boolean(DATABASE_URL);
 const startTime = Date.now();
 const SMTP_CONNECTION_TIMEOUT_MS = Math.max(1000, Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000));
@@ -77,6 +85,7 @@ const dbPath = path.join(__dirname, "inquiries.json");
 const auditPath = path.join(__dirname, "audit-log.json");
 const inquiryBacklogPath = path.join(__dirname, "inquiry-backlog.json");
 const usersPath = path.join(__dirname, "users.json");
+const adminUsersPath = path.join(__dirname, "admin-users.json");
 const userProgressPath = path.join(__dirname, "user-progress.json");
 const uploadsDir = path.join(__dirname, "uploads");
 const backupsDir = path.join(__dirname, "backups");
@@ -250,11 +259,46 @@ function getSuppliedAdminKey(req) {
   return (req.query.key || req.headers["x-admin-key"] || req.body?.key || "").toString();
 }
 
+function getSuppliedAdminMasterKey(req) {
+  return (
+    req.query.masterKey
+    || req.query.master_key
+    || req.headers["x-admin-master-key"]
+    || req.body?.masterKey
+    || req.body?.master_key
+    || ""
+  ).toString();
+}
+
 function isAuthorizedAdminRequest(req) {
   return Boolean(ADMIN_KEY) && getSuppliedAdminKey(req) === ADMIN_KEY;
 }
 
-function requireAdmin(req, res, next) {
+function isAuthorizedAdminMasterRequest(req) {
+  return Boolean(ADMIN_MASTER_KEY) && getSuppliedAdminMasterKey(req) === ADMIN_MASTER_KEY;
+}
+
+function validateAdminMasterAccess(req, res) {
+  if (!ADMIN_MASTER_KEY) {
+    res.status(503).json({
+      ok: false,
+      message: "Admin master key is not configured. Set ADMIN_MASTER_KEY on the server."
+    });
+    return false;
+  }
+
+  if (!isAuthorizedAdminMasterRequest(req)) {
+    res.status(403).json({
+      ok: false,
+      message: "Admin master authorization required."
+    });
+    return false;
+  }
+
+  return true;
+}
+
+async function requireAdmin(req, res, next) {
   if (!ADMIN_KEY) {
     return res.status(503).json({
       ok: false,
@@ -269,7 +313,35 @@ function requireAdmin(req, res, next) {
     });
   }
 
-  return next();
+  const token = getBearerToken(req);
+  if (!token) {
+    return res.status(401).json({ ok: false, message: "Admin authentication required." });
+  }
+
+  try {
+    const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
+    if (!decoded || decoded.role !== "admin") {
+      return res.status(401).json({ ok: false, message: "Invalid admin token." });
+    }
+
+    const adminId = Number(decoded.sub);
+    const admin = await findAdminById(adminId);
+    if (!admin) {
+      return res.status(401).json({ ok: false, message: "Invalid admin token." });
+    }
+
+    const tokenVersion = Number(decoded.av || 1);
+    const adminTokenVersion = Number(admin.token_version || 1);
+    if (!Number.isFinite(tokenVersion) || tokenVersion !== adminTokenVersion) {
+      return res.status(401).json({ ok: false, message: "Admin session expired. Please log in again." });
+    }
+
+    req.authAdmin = admin;
+    req.authAdminToken = decoded;
+    return next();
+  } catch (_error) {
+    return res.status(401).json({ ok: false, message: "Invalid admin token." });
+  }
 }
 
 function normalizeLikeValue(value) {
@@ -411,6 +483,7 @@ async function initStorage() {
     ensureJsonFile(dbPath, "[]");
     ensureJsonFile(auditPath, "[]");
     ensureJsonFile(usersPath, "[]");
+    ensureJsonFile(adminUsersPath, "[]");
     ensureJsonFile(userProgressPath, "[]");
     console.log("Using local JSON storage for inquiries.");
     return;
@@ -479,6 +552,30 @@ async function initStorage() {
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_user_agent TEXT");
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx ON users (phone) WHERE phone IS NOT NULL");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id SERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      email TEXT,
+      phone TEXT,
+      bank_details TEXT,
+      password_hash TEXT NOT NULL,
+      token_version INTEGER NOT NULL DEFAULT 1,
+      last_login_at TIMESTAMPTZ,
+      last_login_ip TEXT,
+      last_login_user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS email TEXT");
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS phone TEXT");
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS bank_details TEXT");
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1");
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ");
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS last_login_ip TEXT");
+  await pool.query("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS last_login_user_agent TEXT");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_project_progress (
@@ -1156,6 +1253,34 @@ function signUserToken(user) {
   );
 }
 
+function toPublicAdminUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email || null,
+    phone: user.phone || null,
+    bank_details: user.bank_details || null,
+    token_version: Number(user.token_version || 1),
+    created_at: user.created_at || null,
+    last_login_at: user.last_login_at || null,
+    last_login_ip: user.last_login_ip || null,
+    last_login_user_agent: user.last_login_user_agent || null
+  };
+}
+
+function signAdminToken(admin) {
+  return jwt.sign(
+    {
+      sub: admin.id,
+      role: "admin",
+      username: admin.username,
+      av: Number(admin.token_version || 1)
+    },
+    ADMIN_JWT_SECRET,
+    { expiresIn: `${ADMIN_SESSION_HOURS}h` }
+  );
+}
+
 function getBearerToken(req) {
   const header = req.headers.authorization || "";
   if (!header.startsWith("Bearer ")) {
@@ -1193,6 +1318,294 @@ async function findUserById(id) {
   );
 
   return result.rows[0] || null;
+}
+
+async function findAdminById(id) {
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    const found = admins.find((item) => item.id === id) || null;
+    if (!found) {
+      return null;
+    }
+
+    return {
+      ...found,
+      token_version: Number(found.token_version || 1),
+      last_login_at: found.last_login_at || null,
+      last_login_ip: found.last_login_ip || null,
+      last_login_user_agent: found.last_login_user_agent || null
+    };
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, username, email, phone, bank_details, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      FROM admin_users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function findAdminByUsername(username) {
+  const normalized = String(username || "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    return admins.find((item) => String(item.username || "").toLowerCase() === normalized) || null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, username, email, phone, bank_details, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      FROM admin_users
+      WHERE LOWER(username) = $1
+      LIMIT 1
+    `,
+    [normalized]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function createAdminUser({ username, passwordHash, email, phone, bankDetails }) {
+  const normalizedUsername = String(username || "").trim();
+  if (!normalizedUsername) {
+    return null;
+  }
+
+  const normalizedEmail = String(email || "").trim().toLowerCase() || null;
+  const normalizedPhone = normalizePhone(phone) || null;
+  const normalizedBankDetails = String(bankDetails || "").trim() || null;
+
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    const existing = admins.find(
+      (item) => String(item.username || "").toLowerCase() === normalizedUsername.toLowerCase()
+    );
+    if (existing) {
+      return null;
+    }
+
+    const nextId = admins.length ? admins[0].id + 1 : 1;
+    const row = {
+      id: nextId,
+      username: normalizedUsername,
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      bank_details: normalizedBankDetails,
+      password_hash: passwordHash,
+      token_version: 1,
+      last_login_at: null,
+      last_login_ip: null,
+      last_login_user_agent: null,
+      created_at: nowIso()
+    };
+
+    admins.unshift(row);
+    writeJsonArray(adminUsersPath, admins);
+    return row;
+  }
+
+  const result = await pool.query(
+    `
+      INSERT INTO admin_users (username, email, phone, bank_details, password_hash)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT DO NOTHING
+      RETURNING id, username, email, phone, bank_details, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+    `,
+    [normalizedUsername, normalizedEmail, normalizedPhone, normalizedBankDetails, passwordHash]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function listAdminUsers() {
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    return admins
+      .slice()
+      .sort((a, b) => (String(a.created_at || "") < String(b.created_at || "") ? 1 : -1));
+  }
+
+  const result = await pool.query(
+    `
+      SELECT id, username, email, phone, bank_details, token_version, created_at, last_login_at, last_login_ip, last_login_user_agent
+      FROM admin_users
+      ORDER BY created_at DESC, id DESC
+    `
+  );
+
+  return result.rows;
+}
+
+async function countAdminUsers() {
+  if (!usePostgres) {
+    return readJsonArray(adminUsersPath).length;
+  }
+
+  const result = await pool.query("SELECT COUNT(*)::int AS count FROM admin_users");
+  return Number(result.rows[0] && result.rows[0].count ? result.rows[0].count : 0);
+}
+
+async function updateAdminUserAccount(adminId, { email, phone, bankDetails, password }) {
+  const normalizedEmail = String(email || "").trim().toLowerCase() || null;
+  const normalizedPhone = String(phone || "").trim() ? normalizePhone(phone) : null;
+  const normalizedBankDetails = String(bankDetails || "").trim() || null;
+  const nextPassword = String(password || "");
+
+  if (normalizedEmail && !/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
+    throw new Error("Please provide a valid email address.");
+  }
+
+  if (String(phone || "").trim() && !normalizedPhone) {
+    throw new Error("Please provide a valid phone number.");
+  }
+
+  let passwordHash = null;
+  if (nextPassword) {
+    if (nextPassword.length < 10) {
+      throw new Error("Admin password must be at least 10 characters.");
+    }
+
+    passwordHash = await bcrypt.hash(nextPassword, 12);
+  }
+
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    const index = admins.findIndex((item) => item.id === adminId);
+    if (index === -1) {
+      return null;
+    }
+
+    admins[index] = {
+      ...admins[index],
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      bank_details: normalizedBankDetails,
+      ...(passwordHash ? { password_hash: passwordHash, token_version: Number(admins[index].token_version || 1) + 1 } : {})
+    };
+
+    writeJsonArray(adminUsersPath, admins);
+    return admins[index];
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE admin_users
+      SET
+        email = $1,
+        phone = $2,
+        bank_details = $3,
+        password_hash = COALESCE($4, password_hash),
+        token_version = CASE WHEN $4 IS NULL THEN token_version ELSE token_version + 1 END
+      WHERE id = $5
+      RETURNING id, username, email, phone, bank_details, password_hash, token_version, created_at, last_login_at, last_login_ip, last_login_user_agent
+    `,
+    [normalizedEmail, normalizedPhone, normalizedBankDetails, passwordHash, adminId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function deleteAdminUserById(adminId) {
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    const existing = admins.find((item) => item.id === adminId) || null;
+    if (!existing) {
+      return null;
+    }
+
+    const next = admins.filter((item) => item.id !== adminId);
+    writeJsonArray(adminUsersPath, next);
+    return existing;
+  }
+
+  const result = await pool.query(
+    `
+      DELETE FROM admin_users
+      WHERE id = $1
+      RETURNING id, username, email, phone, bank_details, token_version, created_at, last_login_at, last_login_ip, last_login_user_agent
+    `,
+    [adminId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function updateAdminLoginMetadata(adminId, req) {
+  const loginAt = nowIso();
+  const loginIp = req.ip || null;
+  const loginUserAgent = String(req.headers["user-agent"] || "").slice(0, 255) || null;
+
+  if (!usePostgres) {
+    const admins = readJsonArray(adminUsersPath);
+    const index = admins.findIndex((item) => item.id === adminId);
+    if (index === -1) {
+      return;
+    }
+
+    admins[index] = {
+      ...admins[index],
+      last_login_at: loginAt,
+      last_login_ip: loginIp,
+      last_login_user_agent: loginUserAgent,
+      token_version: Number(admins[index].token_version || 1)
+    };
+
+    writeJsonArray(adminUsersPath, admins);
+    return;
+  }
+
+  await pool.query(
+    `
+      UPDATE admin_users
+      SET last_login_at = $1, last_login_ip = $2, last_login_user_agent = $3
+      WHERE id = $4
+    `,
+    [loginAt, loginIp, loginUserAgent, adminId]
+  );
+}
+
+async function ensureBootstrapAdminUser() {
+  if (!ADMIN_BOOTSTRAP_USERNAME) {
+    console.warn("No bootstrap admin username configured. Set ADMIN_BOOTSTRAP_USERNAME.");
+    return;
+  }
+
+  if (!ADMIN_BOOTSTRAP_PASSWORD) {
+    console.warn("No bootstrap admin password configured. Set ADMIN_BOOTSTRAP_PASSWORD before production use.");
+    return;
+  }
+
+  if (ADMIN_BOOTSTRAP_PASSWORD.length < 10) {
+    console.warn("ADMIN_BOOTSTRAP_PASSWORD must be at least 10 characters. Bootstrap admin user not created.");
+    return;
+  }
+
+  const existing = await findAdminByUsername(ADMIN_BOOTSTRAP_USERNAME);
+  if (existing) {
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(ADMIN_BOOTSTRAP_PASSWORD, 12);
+  const created = await createAdminUser({
+    username: ADMIN_BOOTSTRAP_USERNAME,
+    passwordHash,
+    email: ADMIN_BOOTSTRAP_EMAIL,
+    phone: ADMIN_BOOTSTRAP_PHONE,
+    bankDetails: ADMIN_BOOTSTRAP_BANK_DETAILS
+  });
+
+  if (created) {
+    console.log(`Bootstrap admin user created: ${created.username}`);
+  }
 }
 
 async function findUserByIdentity(identity) {
@@ -1852,6 +2265,10 @@ app.get("/admin", (_req, res) => {
   return res.redirect("/admin.html");
 });
 
+app.get("/admin/employee", (_req, res) => {
+  return res.redirect("/admin-employee.html");
+});
+
 app.get("/account", (_req, res) => {
   return res.redirect("/account.html");
 });
@@ -1969,6 +2386,221 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
   }
 });
 
+app.post("/api/admin/auth/login", async (req, res) => {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({ ok: false, message: "Admin endpoint is not configured. Set ADMIN_KEY on the server." });
+  }
+
+  if (!isAuthorizedAdminRequest(req)) {
+    return res.status(401).json({ ok: false, message: "Invalid admin key." });
+  }
+
+  const username = String(req.body.username || "").trim();
+  const password = String(req.body.password || "");
+
+  if (!username || !password) {
+    return res.status(400).json({ ok: false, message: "Admin username and password are required." });
+  }
+
+  try {
+    const admin = await findAdminByUsername(username);
+    if (!admin) {
+      return res.status(401).json({ ok: false, message: "Invalid admin credentials." });
+    }
+
+    const isMatch = await bcrypt.compare(password, admin.password_hash || "");
+    if (!isMatch) {
+      return res.status(401).json({ ok: false, message: "Invalid admin credentials." });
+    }
+
+    await updateAdminLoginMetadata(admin.id, req);
+    const adminAfterLogin = await findAdminById(admin.id);
+    if (!adminAfterLogin) {
+      return res.status(500).json({ ok: false, message: "Unable to login admin right now." });
+    }
+
+    const token = signAdminToken(adminAfterLogin);
+    return res.json({ ok: true, token, admin: toPublicAdminUser(adminAfterLogin) });
+  } catch (error) {
+    console.error("Failed to login admin", error);
+    return res.status(500).json({ ok: false, message: "Unable to login admin right now." });
+  }
+});
+
+app.get("/api/admin/auth/me", requireAdmin, async (req, res) => {
+  return res.json({ ok: true, admin: toPublicAdminUser(req.authAdmin) });
+});
+
+app.get("/api/admin/employee/me", requireAdmin, async (req, res) => {
+  return res.json({
+    ok: true,
+    employee: {
+      username: req.authAdmin.username,
+      email: req.authAdmin.email || null,
+      phone: req.authAdmin.phone || null,
+      bank_details: req.authAdmin.bank_details || null,
+      password: null,
+      password_note: "Passwords are securely hashed and cannot be viewed.",
+      created_at: req.authAdmin.created_at || null,
+      last_login_at: req.authAdmin.last_login_at || null,
+      last_login_ip: req.authAdmin.last_login_ip || null
+    }
+  });
+});
+
+app.post("/api/admin/admin-users", requireAdmin, async (req, res) => {
+  if (!validateAdminMasterAccess(req, res)) {
+    return;
+  }
+
+  const username = String(req.body.username || "").trim();
+  const password = String(req.body.password || "");
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const phone = String(req.body.phone || "").trim();
+  const bankDetails = String(req.body.bankDetails || req.body.bank_details || "").trim();
+
+  if (!username || !password) {
+    return res.status(400).json({ ok: false, message: "username and password are required." });
+  }
+
+  if (username.length < 3 || username.length > 64 || !/^[a-zA-Z0-9_.-]+$/.test(username)) {
+    return res.status(400).json({ ok: false, message: "Username must be 3-64 characters and use letters/numbers/_/./-." });
+  }
+
+  if (password.length < 10) {
+    return res.status(400).json({ ok: false, message: "Admin password must be at least 10 characters." });
+  }
+
+  if (email && !/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(400).json({ ok: false, message: "Please provide a valid email address." });
+  }
+
+  if (phone && !normalizePhone(phone)) {
+    return res.status(400).json({ ok: false, message: "Please provide a valid phone number." });
+  }
+
+  try {
+    const existing = await findAdminByUsername(username);
+    if (existing) {
+      return res.status(409).json({ ok: false, message: "An admin with this username already exists." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const created = await createAdminUser({ username, passwordHash, email, phone, bankDetails });
+    if (!created) {
+      return res.status(409).json({ ok: false, message: "Unable to create admin user." });
+    }
+
+    await addAuditEntry({
+      action: "admin-user-create",
+      changedFields: {
+        username: created.username,
+        created_by_admin_id: req.authAdmin.id
+      }
+    });
+
+    return res.status(201).json({ ok: true, admin: toPublicAdminUser(created) });
+  } catch (error) {
+    console.error("Failed to create admin user", error);
+    return res.status(500).json({ ok: false, message: "Unable to create admin user right now." });
+  }
+});
+
+app.get("/api/admin/admin-users", requireAdmin, async (_req, res) => {
+  try {
+    const admins = await listAdminUsers();
+    return res.json({ ok: true, admins: admins.map(toPublicAdminUser) });
+  } catch (error) {
+    console.error("Failed to list admin users", error);
+    return res.status(500).json({ ok: false, message: "Unable to list admin users right now." });
+  }
+});
+
+app.patch("/api/admin/admin-users/:id", requireAdmin, async (req, res) => {
+  const adminId = Number(req.params.id);
+  if (!Number.isInteger(adminId) || adminId < 1) {
+    return res.status(400).json({ ok: false, message: "Invalid admin id." });
+  }
+
+  const email = String(req.body.email || "").trim();
+  const phone = String(req.body.phone || "").trim();
+  const bankDetails = String(req.body.bankDetails || req.body.bank_details || "").trim();
+  const password = String(req.body.password || "");
+
+  const isSelfUpdate = adminId === Number(req.authAdmin.id);
+  if (!isSelfUpdate && !validateAdminMasterAccess(req, res)) {
+    return;
+  }
+
+  try {
+    const updated = await updateAdminUserAccount(adminId, { email, phone, bankDetails, password });
+    if (!updated) {
+      return res.status(404).json({ ok: false, message: "Admin user not found." });
+    }
+
+    await addAuditEntry({
+      action: "admin-user-update",
+      changedFields: {
+        admin_id: updated.id,
+        username: updated.username,
+        changed_by_admin_id: req.authAdmin.id,
+        password_rotated: Boolean(password)
+      }
+    });
+
+    return res.json({ ok: true, admin: toPublicAdminUser(updated) });
+  } catch (error) {
+    const message = error && error.message ? error.message : "Unable to update admin user right now.";
+    if (message.includes("valid") || message.includes("password")) {
+      return res.status(400).json({ ok: false, message });
+    }
+
+    console.error("Failed to update admin user", error);
+    return res.status(500).json({ ok: false, message: "Unable to update admin user right now." });
+  }
+});
+
+app.delete("/api/admin/admin-users/:id", requireAdmin, async (req, res) => {
+  const adminId = Number(req.params.id);
+  if (!Number.isInteger(adminId) || adminId < 1) {
+    return res.status(400).json({ ok: false, message: "Invalid admin id." });
+  }
+
+  if (adminId === Number(req.authAdmin.id)) {
+    return res.status(400).json({ ok: false, message: "You cannot delete the admin account currently in use." });
+  }
+
+  if (!validateAdminMasterAccess(req, res)) {
+    return;
+  }
+
+  try {
+    const currentCount = await countAdminUsers();
+    if (currentCount <= 1) {
+      return res.status(400).json({ ok: false, message: "At least one admin account must remain." });
+    }
+
+    const removed = await deleteAdminUserById(adminId);
+    if (!removed) {
+      return res.status(404).json({ ok: false, message: "Admin user not found." });
+    }
+
+    await addAuditEntry({
+      action: "admin-user-delete",
+      changedFields: {
+        admin_id: removed.id,
+        username: removed.username,
+        deleted_by_admin_id: req.authAdmin.id
+      }
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Failed to delete admin user", error);
+    return res.status(500).json({ ok: false, message: "Unable to delete admin user right now." });
+  }
+});
+
 app.get("/api/auth/me", requireUser, async (req, res) => {
   return res.json({ ok: true, user: toPublicUser(req.authUser) });
 });
@@ -2077,6 +2709,10 @@ app.post("/api/user/settings/sessions/revoke-others", requireUser, async (req, r
 });
 
 app.post("/api/admin/user-progress", requireAdmin, async (req, res) => {
+  if (!validateAdminMasterAccess(req, res)) {
+    return;
+  }
+
   const identity = String(req.body.identity || req.body.username || req.body.email || "").trim();
   const projectName = String(req.body.projectName || "").trim();
   const status = String(req.body.status || "").trim();
@@ -2127,6 +2763,10 @@ app.post("/api/admin/user-progress", requireAdmin, async (req, res) => {
 });
 
 app.post("/api/admin/users/reset", requireAdmin, async (_req, res) => {
+  if (!validateAdminMasterAccess(_req, res)) {
+    return;
+  }
+
   try {
     if (!usePostgres) {
       writeJsonArray(usersPath, []);
@@ -2466,6 +3106,7 @@ app.use((error, req, res, _next) => {
 initStorage()
   .then(async () => {
     mailer = createMailer();
+    await ensureBootstrapAdminUser();
 
     await checkStorageHealth();
     monitorState.backlogPending = readJsonArray(inquiryBacklogPath).length;
