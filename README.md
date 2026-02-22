@@ -114,6 +114,7 @@ Admin auth and profile APIs:
 - `POST /api/admin/auth/login` (requires `x-admin-key` + `username` + `password`)
 - `GET /api/admin/auth/me`
 - `GET /api/admin/employee/me`
+- `GET /api/admin/recovery/admin-usernames` (recovery route; requires `x-admin-key` + `x-admin-master-key`, no admin token)
 - `POST /api/admin/admin-users` (create additional admin accounts)
 - `GET /api/admin/admin-users` (list admin accounts)
 - `PATCH /api/admin/admin-users/:id` (update admin email/phone/bank details and optionally rotate password)
@@ -181,6 +182,7 @@ Set these in your deployment platform to enable email notifications and monitori
 - `ADMIN_BOOTSTRAP_EMAIL` (optional bootstrap admin email)
 - `ADMIN_BOOTSTRAP_PHONE` (optional bootstrap admin phone)
 - `ADMIN_BOOTSTRAP_BANK_DETAILS` (optional bootstrap admin bank details)
+- `ADMIN_BOOTSTRAP_SYNC_PASSWORD` (optional, default `false`; when `true`, updates existing bootstrap admin password on startup)
 - `ADMIN_SESSION_HOURS` (optional, default `12`; admin token lifetime)
 - `TRUST_PROXY` (recommended for reverse-proxy hosts; set `1` on Render so rate limits use real client IPs)
 - `ENABLE_SECURITY_HEADERS` (optional, default `true`; enables CSP and hardening headers)

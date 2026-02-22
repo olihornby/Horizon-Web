@@ -26,6 +26,7 @@ const ADMIN_BOOTSTRAP_PASSWORD = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || 
 const ADMIN_BOOTSTRAP_EMAIL = String(process.env.ADMIN_BOOTSTRAP_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
 const ADMIN_BOOTSTRAP_PHONE = String(process.env.ADMIN_BOOTSTRAP_PHONE || process.env.ADMIN_PHONE || "").trim();
 const ADMIN_BOOTSTRAP_BANK_DETAILS = String(process.env.ADMIN_BOOTSTRAP_BANK_DETAILS || process.env.ADMIN_BANK_DETAILS || "").trim();
+const ADMIN_BOOTSTRAP_SYNC_PASSWORD = String(process.env.ADMIN_BOOTSTRAP_SYNC_PASSWORD || "false") === "true";
 const usePostgres = Boolean(DATABASE_URL);
 const startTime = Date.now();
 const SMTP_CONNECTION_TIMEOUT_MS = Math.max(1000, Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10000));
@@ -1591,6 +1592,25 @@ async function ensureBootstrapAdminUser() {
 
   const existing = await findAdminByUsername(ADMIN_BOOTSTRAP_USERNAME);
   if (existing) {
+    if (!ADMIN_BOOTSTRAP_SYNC_PASSWORD) {
+      return;
+    }
+
+    const preservedEmail = ADMIN_BOOTSTRAP_EMAIL || existing.email || "";
+    const preservedPhone = ADMIN_BOOTSTRAP_PHONE || existing.phone || "";
+    const preservedBankDetails = ADMIN_BOOTSTRAP_BANK_DETAILS || existing.bank_details || "";
+
+    const updated = await updateAdminUserAccount(existing.id, {
+      email: preservedEmail,
+      phone: preservedPhone,
+      bankDetails: preservedBankDetails,
+      password: ADMIN_BOOTSTRAP_PASSWORD
+    });
+
+    if (updated) {
+      console.log(`Bootstrap admin password synced for: ${existing.username}`);
+    }
+
     return;
   }
 
@@ -2424,6 +2444,36 @@ app.post("/api/admin/auth/login", async (req, res) => {
   } catch (error) {
     console.error("Failed to login admin", error);
     return res.status(500).json({ ok: false, message: "Unable to login admin right now." });
+  }
+});
+
+app.get("/api/admin/recovery/admin-usernames", async (req, res) => {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({ ok: false, message: "Admin endpoint is not configured. Set ADMIN_KEY on the server." });
+  }
+
+  if (!isAuthorizedAdminRequest(req)) {
+    return res.status(401).json({ ok: false, message: "Invalid admin key." });
+  }
+
+  if (!validateAdminMasterAccess(req, res)) {
+    return;
+  }
+
+  try {
+    const admins = await listAdminUsers();
+    const usernames = admins
+      .map((item) => String(item.username || "").trim())
+      .filter((item) => Boolean(item));
+
+    return res.json({
+      ok: true,
+      usernames,
+      total: usernames.length
+    });
+  } catch (error) {
+    console.error("Failed to list admin usernames for recovery", error);
+    return res.status(500).json({ ok: false, message: "Unable to load admin usernames right now." });
   }
 });
 
