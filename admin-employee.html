@@ -47,6 +47,9 @@
           <label for="employee-admin-key">Admin Key</label>
           <input id="employee-admin-key" type="password" required />
 
+          <label for="employee-admin-master-key">Admin Master Key (owner only)</label>
+          <input id="employee-admin-master-key" type="password" autocomplete="off" />
+
           <label for="employee-admin-username">Admin Username</label>
           <input id="employee-admin-username" type="text" autocomplete="username" required />
 
@@ -57,6 +60,17 @@
         </form>
 
         <p id="employee-auth-status" class="form-status" aria-live="polite"></p>
+
+        <section class="card admin-panel" id="recovery-card">
+          <h4>Temporary Username Recovery</h4>
+          <p>Loads admin usernames directly using admin key + master key.</p>
+          <div class="admin-filter-actions">
+            <button class="btn btn-submit" id="load-admin-usernames" type="button">Load Admin Usernames</button>
+          </div>
+          <ul id="recovery-usernames" class="audit-list">
+            <li>No usernames loaded yet.</li>
+          </ul>
+        </section>
 
         <section id="employee-info-card" class="card admin-panel" hidden>
           <h4>Your Employee Details</h4>
@@ -77,11 +91,14 @@
     (function () {
       const form = document.getElementById("employee-auth-form");
       const keyInput = document.getElementById("employee-admin-key");
+      const masterKeyInput = document.getElementById("employee-admin-master-key");
       const usernameInput = document.getElementById("employee-admin-username");
       const passwordInput = document.getElementById("employee-admin-password");
       const status = document.getElementById("employee-auth-status");
       const infoCard = document.getElementById("employee-info-card");
       const infoList = document.getElementById("employee-info-list");
+      const loadUsernamesButton = document.getElementById("load-admin-usernames");
+      const recoveryList = document.getElementById("recovery-usernames");
 
       const homeLink = document.querySelector(".logo-link");
       const adminNavLink = document.querySelector("[data-admin-link]");
@@ -170,6 +187,43 @@
         return payload.employee;
       }
 
+      async function loadRecoveryUsernames(key, masterKey) {
+        const response = await fetch("/api/admin/recovery/admin-usernames", {
+          headers: {
+            "x-admin-key": key,
+            "x-admin-master-key": masterKey,
+            Accept: "application/json"
+          }
+        });
+
+        const payload = await response.json().catch(function () {
+          return { ok: false, message: "Unexpected response" };
+        });
+
+        if (!response.ok || !payload.ok) {
+          throw new Error((payload && payload.message) || "Unable to load admin usernames.");
+        }
+
+        return Array.isArray(payload.usernames) ? payload.usernames : [];
+      }
+
+      function renderRecoveryUsernames(usernames) {
+        if (!recoveryList) {
+          return;
+        }
+
+        if (!usernames.length) {
+          recoveryList.innerHTML = "<li>No usernames found.</li>";
+          return;
+        }
+
+        recoveryList.innerHTML = usernames
+          .map(function (item) {
+            return "<li><strong>" + escapeHtml(item) + "</strong></li>";
+          })
+          .join("");
+      }
+
       form.addEventListener("submit", async function (event) {
         event.preventDefault();
 
@@ -207,6 +261,7 @@
           infoCard.hidden = false;
 
           sessionStorage.setItem("horizonAdminKey", key);
+          sessionStorage.setItem("horizonAdminMasterKey", masterKeyInput.value.trim());
           sessionStorage.setItem("horizonAdminUsername", username);
           sessionStorage.setItem("horizonAdminToken", loginPayload.token);
 
@@ -218,7 +273,32 @@
       });
 
       keyInput.value = sessionStorage.getItem("horizonAdminKey") || "";
+      masterKeyInput.value = sessionStorage.getItem("horizonAdminMasterKey") || "";
       usernameInput.value = sessionStorage.getItem("horizonAdminUsername") || "";
+
+      if (loadUsernamesButton) {
+        loadUsernamesButton.addEventListener("click", async function () {
+          const key = keyInput.value.trim();
+          const masterKey = masterKeyInput.value.trim();
+
+          if (!key || !masterKey) {
+            setStatus("Admin key and master key are required to load usernames.", "form-status-error");
+            return;
+          }
+
+          setStatus("Loading admin usernames...", "form-status-loading");
+
+          try {
+            const usernames = await loadRecoveryUsernames(key, masterKey);
+            renderRecoveryUsernames(usernames);
+            sessionStorage.setItem("horizonAdminKey", key);
+            sessionStorage.setItem("horizonAdminMasterKey", masterKey);
+            setStatus("Admin usernames loaded.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to load usernames.", "form-status-error");
+          }
+        });
+      }
     })();
   </script>
 </body>
