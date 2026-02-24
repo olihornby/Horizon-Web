@@ -103,6 +103,31 @@
 
               <button class="btn btn-submit" type="submit">Change Password</button>
             </form>
+
+            <hr />
+            <h4>Authenticator App (MFA)</h4>
+            <p id="settings-mfa-status">Authenticator status will appear here.</p>
+            <div id="settings-mfa-setup" hidden>
+              <p>Scan this QR code in Microsoft Authenticator (or any TOTP app), then enter the 6-digit code to enable.</p>
+              <img id="settings-mfa-qr" alt="Authenticator setup QR code" style="max-width: 220px; display: block; margin-bottom: 0.75rem;" hidden />
+              <p><strong>Manual setup key:</strong> <span id="settings-mfa-secret">-</span></p>
+            </div>
+
+            <form id="settings-mfa-enable-form" class="account-form" autocomplete="off" hidden>
+              <label for="settings-mfa-enable-code">Authenticator Code</label>
+              <input id="settings-mfa-enable-code" type="text" inputmode="numeric" maxlength="8" placeholder="123456" />
+              <button class="btn btn-submit" type="submit">Enable Authenticator</button>
+            </form>
+
+            <form id="settings-mfa-disable-form" class="account-form" autocomplete="off" hidden>
+              <label for="settings-mfa-disable-code">Authenticator Code</label>
+              <input id="settings-mfa-disable-code" type="text" inputmode="numeric" maxlength="8" placeholder="123456" />
+              <button class="btn btn-submit" type="submit">Disable Authenticator</button>
+            </form>
+
+            <div class="admin-filter-actions" style="margin-top: 0.75rem;">
+              <button class="btn btn-submit" type="button" id="settings-mfa-start">Start Setup</button>
+            </div>
           </article>
         </div>
 
@@ -128,6 +153,9 @@
 
               <label for="login-password">Password</label>
               <input id="login-password" type="password" required />
+
+              <label for="login-mfa-code">Authenticator Code (if enabled)</label>
+              <input id="login-mfa-code" type="text" inputmode="numeric" maxlength="8" placeholder="123456" />
 
               <button class="btn btn-submit" type="submit">Log In</button>
             </form>
@@ -180,6 +208,7 @@
       const registerForm = document.getElementById("register-form");
       const loginIdentityInput = document.getElementById("login-identity");
       const loginPasswordInput = document.getElementById("login-password");
+      const loginMfaCodeInput = document.getElementById("login-mfa-code");
       const loginSubmitButton = loginForm ? loginForm.querySelector("button[type='submit']") : null;
       const progressList = document.getElementById("progress-list");
       const progressSection = document.getElementById("progress-section");
@@ -194,6 +223,15 @@
       const settingsCurrentPasswordInput = document.getElementById("settings-current-password");
       const settingsNewPasswordInput = document.getElementById("settings-new-password");
       const settingsConfirmPasswordInput = document.getElementById("settings-confirm-password");
+      const settingsMfaStatus = document.getElementById("settings-mfa-status");
+      const settingsMfaStartButton = document.getElementById("settings-mfa-start");
+      const settingsMfaSetup = document.getElementById("settings-mfa-setup");
+      const settingsMfaQr = document.getElementById("settings-mfa-qr");
+      const settingsMfaSecret = document.getElementById("settings-mfa-secret");
+      const settingsMfaEnableForm = document.getElementById("settings-mfa-enable-form");
+      const settingsMfaEnableCode = document.getElementById("settings-mfa-enable-code");
+      const settingsMfaDisableForm = document.getElementById("settings-mfa-disable-form");
+      const settingsMfaDisableCode = document.getElementById("settings-mfa-disable-code");
       const settingsSessionInfo = document.getElementById("settings-session-info");
       const revokeOtherSessionsButton = document.getElementById("revoke-other-sessions");
 
@@ -212,6 +250,7 @@
       let loginInFlight = false;
       let loginCooldownUntil = 0;
       let loginCooldownInterval = null;
+      let pendingMfaSetup = null;
 
       const PHONE_COUNTRY = {
         US: { dial: "+1", example: "(555) 123-4567" },
@@ -532,6 +571,49 @@
         authSection.hidden = isLoggedIn;
       }
 
+      function resetMfaSetupPreview() {
+        pendingMfaSetup = null;
+        if (settingsMfaSetup) {
+          settingsMfaSetup.hidden = true;
+        }
+        if (settingsMfaQr) {
+          settingsMfaQr.hidden = true;
+          settingsMfaQr.src = "";
+        }
+        if (settingsMfaSecret) {
+          settingsMfaSecret.textContent = "-";
+        }
+        if (settingsMfaEnableForm) {
+          settingsMfaEnableForm.hidden = true;
+        }
+        if (settingsMfaEnableCode) {
+          settingsMfaEnableCode.value = "";
+        }
+      }
+
+      function renderMfaState(user, security) {
+        const isEnabled = Boolean((user && user.mfa_enabled) || (security && security.mfa_enabled));
+
+        if (settingsMfaStatus) {
+          settingsMfaStatus.textContent = isEnabled
+            ? "Authenticator is enabled for your account."
+            : "Authenticator is currently disabled.";
+        }
+
+        if (settingsMfaDisableForm) {
+          settingsMfaDisableForm.hidden = !isEnabled;
+        }
+
+        if (settingsMfaStartButton) {
+          settingsMfaStartButton.disabled = isEnabled;
+          settingsMfaStartButton.textContent = isEnabled ? "Setup Complete" : "Start Setup";
+        }
+
+        if (isEnabled) {
+          resetMfaSetupPreview();
+        }
+      }
+
       function renderSettings(payload) {
         const user = payload && payload.user ? payload.user : null;
         const security = payload && payload.security ? payload.security : {};
@@ -540,6 +622,17 @@
           settingsEmailInput.value = "";
           settingsPhoneInput.value = "";
           settingsSessionInfo.textContent = "Session information will appear here after login.";
+          if (settingsMfaStatus) {
+            settingsMfaStatus.textContent = "Authenticator status will appear here.";
+          }
+          if (settingsMfaDisableForm) {
+            settingsMfaDisableForm.hidden = true;
+          }
+          if (settingsMfaStartButton) {
+            settingsMfaStartButton.disabled = false;
+            settingsMfaStartButton.textContent = "Start Setup";
+          }
+          resetMfaSetupPreview();
           return;
         }
 
@@ -562,6 +655,7 @@
         }
 
         settingsSessionInfo.textContent = parts.join(". ");
+        renderMfaState(user, security);
       }
 
       async function loadUserSettings() {
@@ -613,6 +707,7 @@
 
         const identity = loginIdentityInput.value.trim();
         const password = loginPasswordInput.value;
+        const mfaCode = loginMfaCodeInput ? loginMfaCodeInput.value.trim() : "";
 
         if (!identity || !password) {
           setStatus("Username/email/phone and password are required.", "form-status-error");
@@ -626,7 +721,7 @@
           const response = await fetchWithTimeout("/api/auth/login", {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
-            body: JSON.stringify({ identity, password })
+            body: JSON.stringify({ identity, password, mfaCode })
           }, 10000);
 
           const payload = await response.json().catch(function () {
@@ -647,6 +742,9 @@
 
           clearLoginCooldown();
           auth.setSession(payload.token, payload.user);
+          if (loginMfaCodeInput) {
+            loginMfaCodeInput.value = "";
+          }
           await loadMeAndProjects();
         } catch (error) {
           if (error && Number(error.retryAfterSeconds) > 0) {
@@ -770,6 +868,115 @@
             setStatus("Password changed successfully.", "form-status-success");
           } catch (error) {
             setStatus(error.message || "Unable to change password.", "form-status-error");
+          }
+        });
+      }
+
+      if (settingsMfaStartButton) {
+        settingsMfaStartButton.addEventListener("click", async function () {
+          settingsMfaStartButton.disabled = true;
+          setStatus("Preparing authenticator setup...", "form-status-loading");
+
+          try {
+            const payload = await auth.fetchJson("/api/user/mfa/setup", {
+              method: "POST"
+            });
+
+            const setup = payload && payload.setup ? payload.setup : null;
+            if (!setup || !setup.secret) {
+              throw new Error("Unable to initialize authenticator setup.");
+            }
+
+            pendingMfaSetup = setup;
+            if (settingsMfaSecret) {
+              settingsMfaSecret.textContent = setup.secret;
+            }
+
+            if (settingsMfaQr) {
+              if (setup.qr_data_url) {
+                settingsMfaQr.src = setup.qr_data_url;
+                settingsMfaQr.hidden = false;
+              } else {
+                settingsMfaQr.hidden = true;
+                settingsMfaQr.src = "";
+              }
+            }
+
+            if (settingsMfaSetup) {
+              settingsMfaSetup.hidden = false;
+            }
+
+            if (settingsMfaEnableForm) {
+              settingsMfaEnableForm.hidden = false;
+            }
+
+            setStatus("Scan the QR code (or use the setup key), then enter your 6-digit code to enable.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to start authenticator setup.", "form-status-error");
+          } finally {
+            settingsMfaStartButton.disabled = false;
+          }
+        });
+      }
+
+      if (settingsMfaEnableForm) {
+        settingsMfaEnableForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          if (!pendingMfaSetup) {
+            setStatus("Please start authenticator setup first.", "form-status-error");
+            return;
+          }
+
+          const code = settingsMfaEnableCode ? settingsMfaEnableCode.value.trim() : "";
+          if (!code) {
+            setStatus("Enter the 6-digit authenticator code to enable MFA.", "form-status-error");
+            return;
+          }
+
+          try {
+            const payload = await auth.fetchJson("/api/user/mfa/enable", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code: code })
+            });
+
+            auth.setSession(auth.getToken(), payload.user);
+            resetMfaSetupPreview();
+            await loadUserSettings();
+            setStatus("Authenticator enabled. Future logins require your authenticator code.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to enable authenticator.", "form-status-error");
+          }
+        });
+      }
+
+      if (settingsMfaDisableForm) {
+        settingsMfaDisableForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          const code = settingsMfaDisableCode ? settingsMfaDisableCode.value.trim() : "";
+          if (!code) {
+            setStatus("Enter your current authenticator code to disable MFA.", "form-status-error");
+            return;
+          }
+
+          try {
+            const payload = await auth.fetchJson("/api/user/mfa/disable", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code: code })
+            });
+
+            auth.setSession(auth.getToken(), payload.user);
+            if (settingsMfaDisableCode) {
+              settingsMfaDisableCode.value = "";
+            }
+            resetMfaSetupPreview();
+            await loadUserSettings();
+            setStatus("Authenticator disabled.", "form-status-success");
+          } catch (error) {
+            setStatus(error.message || "Unable to disable authenticator.", "form-status-error");
           }
         });
       }

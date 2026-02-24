@@ -139,6 +139,7 @@ Admin master-key protected account-modification APIs (`x-admin-master-key` requi
 - Left-side slide-out menu with hamburger button and logout action
 - Side-menu **Settings** area for accessibility controls and logout
 - Account settings in portal: profile (email/phone), password change, and "log out other sessions"
+- Optional authenticator app verification (TOTP) for member accounts
 - Admin progress update API: `POST /api/admin/user-progress` (requires admin key + admin auth token)
 - Admin account reset API: `POST /api/admin/users/reset` (requires admin key + admin auth token; clears all client accounts/progress)
 
@@ -147,6 +148,9 @@ Account settings APIs (authenticated user):
 - `PATCH /api/user/settings` with `{ "email": "...", "phone": "..." }`
 - `POST /api/user/settings/password` with `{ "currentPassword": "...", "newPassword": "..." }`
 - `POST /api/user/settings/sessions/revoke-others`
+- `POST /api/user/mfa/setup`
+- `POST /api/user/mfa/enable` with `{ "code": "123456" }`
+- `POST /api/user/mfa/disable` with `{ "code": "123456" }`
 
 `POST /api/admin/user-progress` accepts:
 - `identity` (username/email)
@@ -176,6 +180,8 @@ Set these in your deployment platform to enable email notifications and monitori
 - `BACKUP_CRON` (optional cron override for backup frequency; default is `*/15 * * * *`)
 - `BACKLOG_FLUSH_CRON` (optional cron override for queued inquiry retry frequency; default is `*/2 * * * *`)
 - `AUTH_JWT_SECRET` (recommended in production for account session token signing)
+- `USER_MFA_ISSUER` (optional, default `Horizon`; label shown in authenticator app)
+- `USER_MFA_PENDING_TTL_MS` (optional, default `600000`; MFA setup confirmation window)
 - `ADMIN_JWT_SECRET` (recommended in production for admin session token signing)
 - `ADMIN_MASTER_KEY` (required to modify other admin/employee accounts)
 - `ADMIN_BOOTSTRAP_USERNAME` (optional, default `admin`; used to auto-create first admin)

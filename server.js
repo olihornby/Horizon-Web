@@ -8,6 +8,8 @@ const multer = require("multer");
 const rateLimit = require("express-rate-limit");
 const nodemailer = require("nodemailer");
 const cron = require("node-cron");
+const speakeasy = require("speakeasy");
+const qrcode = require("qrcode");
 const { Pool } = require("pg");
 
 const app = express();
@@ -38,6 +40,8 @@ const REGISTER_RATE_LIMIT_MAX = Math.max(1, Number(process.env.REGISTER_RATE_LIM
 const ADMIN_RATE_LIMIT_MAX = Math.max(1, Number(process.env.ADMIN_RATE_LIMIT_MAX || 250));
 const FAILED_LOGIN_LIMIT = Math.max(1, Number(process.env.FAILED_LOGIN_LIMIT || 8));
 const FAILED_LOGIN_LOCK_MS = Math.max(1000, Number(process.env.FAILED_LOGIN_LOCK_MS || 15 * 60 * 1000));
+const USER_MFA_ISSUER = String(process.env.USER_MFA_ISSUER || "Horizon").trim() || "Horizon";
+const USER_MFA_PENDING_TTL_MS = Math.max(60 * 1000, Number(process.env.USER_MFA_PENDING_TTL_MS || 10 * 60 * 1000));
 const ENABLE_SECURITY_HEADERS = String(process.env.ENABLE_SECURITY_HEADERS || "true") === "true";
 const SECURITY_HSTS_ENABLED = String(
   process.env.SECURITY_HSTS_ENABLED || (process.env.RENDER ? "true" : "false")
@@ -138,6 +142,42 @@ function writeJsonArray(filePath, data) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeOtpCode(value) {
+  return String(value || "").replace(/\s+/g, "").replace(/\D/g, "").trim();
+}
+
+function isMfaPendingValid(user) {
+  if (!user || !user.mfa_pending_secret || !user.mfa_pending_created_at) {
+    return false;
+  }
+
+  const createdAtMs = new Date(user.mfa_pending_created_at).getTime();
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+
+  return (Date.now() - createdAtMs) <= USER_MFA_PENDING_TTL_MS;
+}
+
+function buildUserTotpLabel(user) {
+  const username = String(user && user.username ? user.username : "member").trim() || "member";
+  return `${USER_MFA_ISSUER}:${username}`;
+}
+
+function verifyTotpCode(secret, code) {
+  const token = normalizeOtpCode(code);
+  if (!secret || !token || token.length < 6) {
+    return false;
+  }
+
+  return speakeasy.totp.verify({
+    secret,
+    encoding: "base32",
+    token,
+    window: 1
+  });
 }
 
 function normalizePhone(value) {
@@ -539,6 +579,10 @@ async function initStorage() {
       email TEXT NOT NULL UNIQUE,
       phone TEXT UNIQUE,
       password_hash TEXT NOT NULL,
+      mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      mfa_secret TEXT,
+      mfa_pending_secret TEXT,
+      mfa_pending_created_at TIMESTAMPTZ,
       token_version INTEGER NOT NULL DEFAULT 1,
       last_login_at TIMESTAMPTZ,
       last_login_ip TEXT,
@@ -548,6 +592,10 @@ async function initStorage() {
   `);
 
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_pending_secret TEXT");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_pending_created_at TIMESTAMPTZ");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ");
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip TEXT");
@@ -1235,6 +1283,7 @@ function toPublicUser(user) {
     username: user.username,
     email: user.email,
     phone: user.phone || null,
+    mfa_enabled: Boolean(user.mfa_enabled),
     token_version: Number(user.token_version || 1),
     created_at: user.created_at
   };
@@ -1301,6 +1350,10 @@ async function findUserById(id) {
 
     return {
       ...found,
+      mfa_enabled: Boolean(found.mfa_enabled),
+      mfa_secret: found.mfa_secret || null,
+      mfa_pending_secret: found.mfa_pending_secret || null,
+      mfa_pending_created_at: found.mfa_pending_created_at || null,
       token_version: Number(found.token_version || 1),
       last_login_at: found.last_login_at || null,
       last_login_ip: found.last_login_ip || null,
@@ -1310,7 +1363,7 @@ async function findUserById(id) {
 
   const result = await pool.query(
     `
-      SELECT id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      SELECT id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
       FROM users
       WHERE id = $1
       LIMIT 1
@@ -1638,17 +1691,30 @@ async function findUserByIdentity(identity) {
 
   if (!usePostgres) {
     const users = readJsonArray(usersPath);
-    return users.find((item) => {
+    const found = users.find((item) => {
       const username = String(item.username || "").toLowerCase();
       const email = String(item.email || "").toLowerCase();
       const phone = normalizePhone(item.phone || "");
       return username === normalized || email === normalized || (normalizedPhone && phone === normalizedPhone);
     }) || null;
+
+    if (!found) {
+      return null;
+    }
+
+    return {
+      ...found,
+      mfa_enabled: Boolean(found.mfa_enabled),
+      mfa_secret: found.mfa_secret || null,
+      mfa_pending_secret: found.mfa_pending_secret || null,
+      mfa_pending_created_at: found.mfa_pending_created_at || null,
+      token_version: Number(found.token_version || 1)
+    };
   }
 
   const result = await pool.query(
     `
-      SELECT id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      SELECT id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
       FROM users
       WHERE LOWER(username) = $1 OR LOWER(email) = $1 OR phone = $2
       LIMIT 1
@@ -1684,6 +1750,10 @@ async function createUserAccount({ username, email, phone, passwordHash }) {
       email: normalizedEmail,
       phone: normalizedPhone || null,
       password_hash: passwordHash,
+      mfa_enabled: false,
+      mfa_secret: null,
+      mfa_pending_secret: null,
+      mfa_pending_created_at: null,
       token_version: 1,
       last_login_at: null,
       last_login_ip: null,
@@ -1701,7 +1771,7 @@ async function createUserAccount({ username, email, phone, passwordHash }) {
       INSERT INTO users (username, email, phone, password_hash)
       VALUES ($1, $2, $3, $4)
       ON CONFLICT DO NOTHING
-      RETURNING id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      RETURNING id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
     `,
     [normalizedUsername, normalizedEmail, normalizedPhone || null, passwordHash]
   );
@@ -1741,6 +1811,105 @@ async function updateUserLoginMetadata(userId, req) {
     `,
     [loginAt, loginIp, loginUserAgent, userId]
   );
+}
+
+async function setUserMfaPendingSecret(userId, pendingSecret) {
+  const createdAt = pendingSecret ? nowIso() : null;
+
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return null;
+    }
+
+    users[index] = {
+      ...users[index],
+      mfa_pending_secret: pendingSecret || null,
+      mfa_pending_created_at: createdAt
+    };
+
+    writeJsonArray(usersPath, users);
+    return users[index];
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE users
+      SET mfa_pending_secret = $1, mfa_pending_created_at = $2
+      WHERE id = $3
+      RETURNING id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+    `,
+    [pendingSecret || null, createdAt, userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function enableUserMfa(userId, secret) {
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return null;
+    }
+
+    users[index] = {
+      ...users[index],
+      mfa_enabled: true,
+      mfa_secret: secret,
+      mfa_pending_secret: null,
+      mfa_pending_created_at: null
+    };
+
+    writeJsonArray(usersPath, users);
+    return users[index];
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE users
+      SET mfa_enabled = TRUE, mfa_secret = $1, mfa_pending_secret = NULL, mfa_pending_created_at = NULL
+      WHERE id = $2
+      RETURNING id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+    `,
+    [secret, userId]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function disableUserMfa(userId) {
+  if (!usePostgres) {
+    const users = readJsonArray(usersPath);
+    const index = users.findIndex((item) => item.id === userId);
+    if (index === -1) {
+      return null;
+    }
+
+    users[index] = {
+      ...users[index],
+      mfa_enabled: false,
+      mfa_secret: null,
+      mfa_pending_secret: null,
+      mfa_pending_created_at: null
+    };
+
+    writeJsonArray(usersPath, users);
+    return users[index];
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE users
+      SET mfa_enabled = FALSE, mfa_secret = NULL, mfa_pending_secret = NULL, mfa_pending_created_at = NULL
+      WHERE id = $1
+      RETURNING id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+    `,
+    [userId]
+  );
+
+  return result.rows[0] || null;
 }
 
 async function updateUserContactSettings(userId, { email, phone }) {
@@ -1791,7 +1960,7 @@ async function updateUserContactSettings(userId, { email, phone }) {
       UPDATE users
       SET email = $1, phone = $2
       WHERE id = $3
-      RETURNING id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      RETURNING id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
     `,
     [normalizedEmail, normalizedPhone || null, userId]
   );
@@ -1864,7 +2033,7 @@ async function rotateUserTokenVersion(userId) {
       UPDATE users
       SET token_version = token_version + 1
       WHERE id = $1
-      RETURNING id, username, email, phone, password_hash, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
+      RETURNING id, username, email, phone, password_hash, mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_created_at, token_version, last_login_at, last_login_ip, last_login_user_agent, created_at
     `,
     [userId]
   );
@@ -2359,6 +2528,7 @@ app.post("/api/auth/register", registerLimiter, async (req, res) => {
 app.post("/api/auth/login", loginLimiter, async (req, res) => {
   const identity = String(req.body.identity || req.body.username || req.body.email || "").trim();
   const password = String(req.body.password || "");
+  const mfaCode = normalizeOtpCode(req.body.mfaCode || req.body.mfa_code || "");
 
   if (!identity || !password) {
     return res.status(400).json({ ok: false, message: "Username/email/phone and password are required." });
@@ -2387,6 +2557,27 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
     if (!isMatch) {
       recordFailedLogin(req, identity);
       return res.status(401).json({ ok: false, message: "Invalid login credentials." });
+    }
+
+    if (user.mfa_enabled) {
+      if (!mfaCode) {
+        recordFailedLogin(req, identity);
+        return res.status(401).json({
+          ok: false,
+          mfa_required: true,
+          message: "Authenticator code required."
+        });
+      }
+
+      const isCodeValid = verifyTotpCode(user.mfa_secret, mfaCode);
+      if (!isCodeValid) {
+        recordFailedLogin(req, identity);
+        return res.status(401).json({
+          ok: false,
+          mfa_required: true,
+          message: "Invalid authenticator code."
+        });
+      }
     }
 
     clearFailedLogin(req, identity);
@@ -2741,9 +2932,119 @@ app.get("/api/user/settings", requireUser, async (req, res) => {
       current_session_started_at: tokenIssuedAt ? new Date(tokenIssuedAt * 1000).toISOString() : null,
       last_login_at: req.authUser.last_login_at || null,
       last_login_ip: req.authUser.last_login_ip || null,
-      last_login_user_agent: req.authUser.last_login_user_agent || null
+      last_login_user_agent: req.authUser.last_login_user_agent || null,
+      mfa_enabled: Boolean(req.authUser.mfa_enabled)
     }
   });
+});
+
+app.post("/api/user/mfa/setup", requireUser, async (req, res) => {
+  try {
+    const user = await findUserById(req.authUser.id);
+    if (!user) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    const secret = speakeasy.generateSecret({
+      length: 20,
+      name: buildUserTotpLabel(user),
+      issuer: USER_MFA_ISSUER
+    });
+
+    const base32Secret = String(secret.base32 || "").trim();
+    const otpauthUrl = String(secret.otpauth_url || "").trim();
+    if (!base32Secret || !otpauthUrl) {
+      return res.status(500).json({ ok: false, message: "Unable to initialize authenticator setup right now." });
+    }
+
+    await setUserMfaPendingSecret(user.id, base32Secret);
+
+    let qrDataUrl = null;
+    try {
+      qrDataUrl = await qrcode.toDataURL(otpauthUrl, { margin: 1, width: 220 });
+    } catch (_error) {
+      qrDataUrl = null;
+    }
+
+    return res.json({
+      ok: true,
+      setup: {
+        secret: base32Secret,
+        otpauth_url: otpauthUrl,
+        qr_data_url: qrDataUrl,
+        expires_in_seconds: Math.floor(USER_MFA_PENDING_TTL_MS / 1000)
+      }
+    });
+  } catch (error) {
+    console.error("Failed to initialize MFA setup", error);
+    return res.status(500).json({ ok: false, message: "Unable to initialize authenticator setup right now." });
+  }
+});
+
+app.post("/api/user/mfa/enable", requireUser, async (req, res) => {
+  const code = normalizeOtpCode(req.body.code || req.body.mfaCode || req.body.mfa_code || "");
+  if (!code) {
+    return res.status(400).json({ ok: false, message: "Authenticator code is required." });
+  }
+
+  try {
+    const user = await findUserById(req.authUser.id);
+    if (!user) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    if (!isMfaPendingValid(user)) {
+      return res.status(400).json({ ok: false, message: "Authenticator setup expired. Please start setup again." });
+    }
+
+    const isValid = verifyTotpCode(user.mfa_pending_secret, code);
+    if (!isValid) {
+      return res.status(400).json({ ok: false, message: "Invalid authenticator code." });
+    }
+
+    const updated = await enableUserMfa(user.id, user.mfa_pending_secret);
+    if (!updated) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    return res.json({ ok: true, user: toPublicUser(updated) });
+  } catch (error) {
+    console.error("Failed to enable MFA", error);
+    return res.status(500).json({ ok: false, message: "Unable to enable authenticator right now." });
+  }
+});
+
+app.post("/api/user/mfa/disable", requireUser, async (req, res) => {
+  const code = normalizeOtpCode(req.body.code || req.body.mfaCode || req.body.mfa_code || "");
+  if (!code) {
+    return res.status(400).json({ ok: false, message: "Authenticator code is required." });
+  }
+
+  try {
+    const user = await findUserById(req.authUser.id);
+    if (!user) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    if (!user.mfa_enabled || !user.mfa_secret) {
+      return res.status(400).json({ ok: false, message: "Authenticator is not enabled for this account." });
+    }
+
+    const isValid = verifyTotpCode(user.mfa_secret, code);
+    if (!isValid) {
+      return res.status(400).json({ ok: false, message: "Invalid authenticator code." });
+    }
+
+    const updated = await disableUserMfa(user.id);
+    if (!updated) {
+      return res.status(404).json({ ok: false, message: "User not found." });
+    }
+
+    return res.json({ ok: true, user: toPublicUser(updated) });
+  } catch (error) {
+    console.error("Failed to disable MFA", error);
+    return res.status(500).json({ ok: false, message: "Unable to disable authenticator right now." });
+  }
 });
 
 app.patch("/api/user/settings", requireUser, async (req, res) => {
