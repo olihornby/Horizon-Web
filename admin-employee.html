@@ -70,6 +70,28 @@
           <ul id="recovery-usernames" class="audit-list">
             <li>No usernames loaded yet.</li>
           </ul>
+
+          <h4 style="margin-top: 1rem;">Create Recovery Admin</h4>
+          <form id="recovery-create-admin-form" class="admin-filters" autocomplete="off">
+            <label for="recovery-new-username">New Admin Username</label>
+            <input id="recovery-new-username" type="text" placeholder="owner.recovery" required />
+
+            <label for="recovery-new-password">New Admin Password</label>
+            <input id="recovery-new-password" type="password" minlength="10" required />
+
+            <label for="recovery-new-email">New Admin Email (optional)</label>
+            <input id="recovery-new-email" type="email" placeholder="admin@example.com" />
+
+            <label for="recovery-new-phone">New Admin Phone (optional)</label>
+            <input id="recovery-new-phone" type="text" placeholder="+15551234567" />
+
+            <label for="recovery-new-bank">New Admin Bank Details (optional)</label>
+            <input id="recovery-new-bank" type="text" placeholder="Account/routing details" />
+
+            <div class="admin-filter-actions">
+              <button class="btn btn-submit" type="submit">Create Recovery Admin</button>
+            </div>
+          </form>
         </section>
 
         <section id="employee-info-card" class="card admin-panel" hidden>
@@ -99,6 +121,12 @@
       const infoList = document.getElementById("employee-info-list");
       const loadUsernamesButton = document.getElementById("load-admin-usernames");
       const recoveryList = document.getElementById("recovery-usernames");
+      const recoveryCreateAdminForm = document.getElementById("recovery-create-admin-form");
+      const recoveryNewUsername = document.getElementById("recovery-new-username");
+      const recoveryNewPassword = document.getElementById("recovery-new-password");
+      const recoveryNewEmail = document.getElementById("recovery-new-email");
+      const recoveryNewPhone = document.getElementById("recovery-new-phone");
+      const recoveryNewBank = document.getElementById("recovery-new-bank");
 
       const homeLink = document.querySelector(".logo-link");
       const adminNavLink = document.querySelector("[data-admin-link]");
@@ -207,6 +235,29 @@
         return Array.isArray(payload.usernames) ? payload.usernames : [];
       }
 
+      async function createRecoveryAdmin(key, masterKey, payloadBody) {
+        const response = await fetch("/api/admin/recovery/create-admin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-key": key,
+            "x-admin-master-key": masterKey,
+            Accept: "application/json"
+          },
+          body: JSON.stringify(payloadBody)
+        });
+
+        const payload = await response.json().catch(function () {
+          return { ok: false, message: "Unexpected response" };
+        });
+
+        if (!response.ok || !payload.ok) {
+          throw new Error((payload && payload.message) || "Unable to create recovery admin.");
+        }
+
+        return payload;
+      }
+
       function renderRecoveryUsernames(usernames) {
         if (!recoveryList) {
           return;
@@ -296,6 +347,52 @@
             setStatus("Admin usernames loaded.", "form-status-success");
           } catch (error) {
             setStatus(error.message || "Unable to load usernames.", "form-status-error");
+          }
+        });
+      }
+
+      if (recoveryCreateAdminForm) {
+        recoveryCreateAdminForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+
+          const key = keyInput.value.trim();
+          const masterKey = masterKeyInput.value.trim();
+          const username = (recoveryNewUsername && recoveryNewUsername.value ? recoveryNewUsername.value : "").trim();
+          const password = recoveryNewPassword && recoveryNewPassword.value ? recoveryNewPassword.value : "";
+          const email = (recoveryNewEmail && recoveryNewEmail.value ? recoveryNewEmail.value : "").trim();
+          const phone = (recoveryNewPhone && recoveryNewPhone.value ? recoveryNewPhone.value : "").trim();
+          const bankDetails = (recoveryNewBank && recoveryNewBank.value ? recoveryNewBank.value : "").trim();
+
+          if (!key || !masterKey) {
+            setStatus("Admin key and master key are required to create a recovery admin.", "form-status-error");
+            return;
+          }
+
+          if (!username || !password) {
+            setStatus("Recovery admin username and password are required.", "form-status-error");
+            return;
+          }
+
+          setStatus("Creating recovery admin...", "form-status-loading");
+
+          try {
+            await createRecoveryAdmin(key, masterKey, {
+              username,
+              password,
+              email,
+              phone,
+              bankDetails
+            });
+
+            recoveryCreateAdminForm.reset();
+            sessionStorage.setItem("horizonAdminKey", key);
+            sessionStorage.setItem("horizonAdminMasterKey", masterKey);
+            setStatus("Recovery admin created. You can now log in with that account.", "form-status-success");
+
+            const usernames = await loadRecoveryUsernames(key, masterKey);
+            renderRecoveryUsernames(usernames);
+          } catch (error) {
+            setStatus(error.message || "Unable to create recovery admin.", "form-status-error");
           }
         });
       }

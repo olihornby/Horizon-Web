@@ -115,6 +115,7 @@ Admin auth and profile APIs:
 - `GET /api/admin/auth/me`
 - `GET /api/admin/employee/me`
 - `GET /api/admin/recovery/admin-usernames` (recovery route; requires `x-admin-key` + `x-admin-master-key`, no admin token)
+- `POST /api/admin/recovery/create-admin` (recovery route; requires `x-admin-key` + `x-admin-master-key`, no admin token)
 - `POST /api/admin/admin-users` (create additional admin accounts)
 - `GET /api/admin/admin-users` (list admin accounts)
 - `PATCH /api/admin/admin-users/:id` (update admin email/phone/bank details and optionally rotate password)

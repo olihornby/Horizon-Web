@@ -2477,6 +2477,72 @@ app.get("/api/admin/recovery/admin-usernames", async (req, res) => {
   }
 });
 
+app.post("/api/admin/recovery/create-admin", async (req, res) => {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({ ok: false, message: "Admin endpoint is not configured. Set ADMIN_KEY on the server." });
+  }
+
+  if (!isAuthorizedAdminRequest(req)) {
+    return res.status(401).json({ ok: false, message: "Invalid admin key." });
+  }
+
+  if (!validateAdminMasterAccess(req, res)) {
+    return;
+  }
+
+  const username = String(req.body.username || "").trim();
+  const password = String(req.body.password || "");
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const phone = String(req.body.phone || "").trim();
+  const bankDetails = String(req.body.bankDetails || req.body.bank_details || "").trim();
+
+  if (!username || !password) {
+    return res.status(400).json({ ok: false, message: "username and password are required." });
+  }
+
+  if (username.length < 3 || username.length > 64 || !/^[a-zA-Z0-9_.-]+$/.test(username)) {
+    return res.status(400).json({ ok: false, message: "Username must be 3-64 characters and use letters/numbers/_/./-." });
+  }
+
+  if (password.length < 10) {
+    return res.status(400).json({ ok: false, message: "Admin password must be at least 10 characters." });
+  }
+
+  if (email && !/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(400).json({ ok: false, message: "Please provide a valid email address." });
+  }
+
+  if (phone && !normalizePhone(phone)) {
+    return res.status(400).json({ ok: false, message: "Please provide a valid phone number." });
+  }
+
+  try {
+    const existing = await findAdminByUsername(username);
+    if (existing) {
+      return res.status(409).json({ ok: false, message: "An admin with this username already exists." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const created = await createAdminUser({ username, passwordHash, email, phone, bankDetails });
+    if (!created) {
+      return res.status(409).json({ ok: false, message: "Unable to create admin user." });
+    }
+
+    await addAuditEntry({
+      action: "admin-user-create-recovery",
+      changedFields: {
+        username: created.username,
+        created_by: "recovery-master-key"
+      }
+    });
+
+    return res.status(201).json({ ok: true, admin: toPublicAdminUser(created) });
+  } catch (error) {
+    console.error("Failed to create recovery admin user", error);
+    return res.status(500).json({ ok: false, message: "Unable to create recovery admin user right now." });
+  }
+});
+
 app.get("/api/admin/auth/me", requireAdmin, async (req, res) => {
   return res.json({ ok: true, admin: toPublicAdminUser(req.authAdmin) });
 });
